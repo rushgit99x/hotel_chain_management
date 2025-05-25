@@ -1,0 +1,4 @@
+/* Custom styles for Tailwind */
+.custom-container {
+    max-width: 1200px;
+}
