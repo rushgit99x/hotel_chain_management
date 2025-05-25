@@ -1,23 +1,20 @@
+<?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hotel Chain Management System</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="assets/js/script.js"></script>
-    <link rel="stylesheet" href="assets/css/styles.css">
+    <title>Hotel Chain Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/hotel_chain_management/assets/css/styles.css?v=<?php echo time(); ?>">
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <script src="https://unpkg.com/scrollreveal"></script>
+    <script src="/hotel_chain_management/assets/js/main.js" defer></script>
+    <script src="/hotel_chain_management/assets/js/script.js" defer></script>
 </head>
-<body class="bg-gray-100">
-    <nav class="bg-blue-600 p-4 text-white">
-        <div class="container mx-auto flex justify-between">
-            <a href="index.php" class="text-xl font-bold">Hotel Chain</a>
-            <?php if (isset($_SESSION['user_id'])): ?>
-                <div>
-                    <span>Welcome, <?php echo htmlspecialchars($_SESSION['role']); ?></span>
-                    <a href="logout.php" class="ml-4 bg-red-500 px-3 py-2 rounded hover:bg-red-600">Logout</a>
-                </div>
-            <?php endif; ?>
-        </div>
-    </nav>
-    <div class="container mx-auto p-8">
+<body>
+    <div class="container mx-auto">
