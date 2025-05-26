@@ -1,0 +1,233 @@
+<?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+require_once 'includes/functions.php';
+checkAuth('super_admin');
+
+require_once 'db_connect.php';
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    if (isset($_POST['update_booking'])) {
+        $booking_id = (int)$_POST['booking_id'];
+        $status = $_POST['status'];
+        try {
+            $stmt = $pdo->prepare("UPDATE bookings SET status = ? WHERE id = ?");
+            $stmt->execute([$status, $booking_id]);
+            $success = "Booking updated successfully!";
+        } catch (PDOException $e) {
+            $error = "Error updating booking: " . $e->getMessage();
+        }
+    } elseif (isset($_POST['update_group_booking'])) {
+        $group_booking_id = (int)$_POST['group_booking_id'];
+        $status = $_POST['status'];
+        try {
+            $stmt = $pdo->prepare("UPDATE group_bookings SET status = ? WHERE id = ?");
+            $stmt->execute([$status, $group_booking_id]);
+            $success = "Group booking updated successfully!";
+        } catch (PDOException $e) {
+            $error = "Error updating group booking: " . $e->getMessage();
+        }
+    }
+}
+
+try {
+    $stmt = $pdo->query("SELECT b.*, u.name AS user_name, r.room_number, r.type AS room_type, br.name AS branch_name 
+                         FROM bookings b 
+                         JOIN users u ON b.user_id = u.id 
+                         JOIN rooms r ON b.room_id = r.id 
+                         JOIN branches br ON b.branch_id = br.id 
+                         ORDER BY b.created_at DESC");
+    $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $stmt = $pdo->query("SELECT gb.*, c.company_name, br.name AS branch_name 
+                         FROM group_bookings gb 
+                         JOIN company_profiles c ON gb.company_id = c.id 
+                         JOIN branches br ON gb.hotel_id = br.id 
+                         ORDER BY gb.created_at DESC");
+    $group_bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $error = "Error fetching data: " . $e->getMessage();
+}
+
+include 'templates/header.php';
+?>
+
+<div class="dashboard__container">
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar__header">
+            <img src="/hotel_chain_management/assets/images/logo.png?v=<?php echo time(); ?>" alt="logo" class="sidebar__logo" />
+            <h2 class="sidebar__title">Super Admin</h2>
+            <button class="sidebar__toggle" id="sidebar-toggle">
+                <i class="ri-menu-fold-line"></i>
+            </button>
+        </div>
+        <nav class="sidebar__nav">
+            <ul class="sidebar__links">
+                <li><a href="admin_dashboard.php" class="sidebar__link"><i class="ri-dashboard-line"></i><span>Dashboard</span></a></li>
+                <li><a href="#create-branch" class="sidebar__link" onclick="showSection('create-branch')"><i class="ri-building-line"></i><span>Create Branch</span></a></li>
+                <li><a href="#create-user" class="sidebar__link" onclick="showSection('create-user')"><i class="ri-user-add-line"></i><span>Create User</span></a></li>
+                <li><a href="#create-room" class="sidebar__link" onclick="showSection('create-room')"><i class="ri-home-line"></i><span>Add Room</span></a></li>
+                <li><a href="manage_hotels.php" class="sidebar__link"><i class="ri-building-line"></i><span>Manage Hotels</span></a></li>
+                <li><a href="manage_users.php" class="sidebar__link"><i class="ri-user-line"></i><span>Manage Users</span></a></li>
+                <li><a href="manage_bookings.php" class="sidebar__link active"><i class="ri-calendar-check-line"></i><span>Manage Bookings</span></a></li>
+                <li><a href="reports.php" class="sidebar__link"><i class="ri-bar-chart-line"></i><span>Reports</span></a></li>
+                <li><a href="settings.php" class="sidebar__link"><i class="ri-settings-3-line"></i><span>Settings</span></a></li>
+                <li><a href="logout.php" class="sidebar__link"><i class="ri-logout-box-line"></i><span>Logout</span></a></li>
+            </ul>
+        </nav>
+    </aside>
+
+    <main class="dashboard__content">
+        <header class="dashboard__header">
+            <h1 class="section__header">Manage Bookings</h1>
+            <div class="user__info">
+                <span>Welcome, <?php echo htmlspecialchars($_SESSION['username'] ?? 'Admin'); ?></span>
+                <img src="/hotel_chain_management/assets/images/avatar.png?v=<?php echo time(); ?>" alt="avatar" class="user__avatar" />
+            </div>
+        </header>
+
+        <?php if (isset($error)): ?>
+            <div class="alert alert--error">
+                <i class="ri-error-warning-line"></i>
+                <span><?php echo htmlspecialchars($error); ?></span>
+            </div>
+        <?php elseif (isset($success)): ?>
+            <div class="alert alert--success">
+                <i class="ri-check-line"></i>
+                <span><?php echo htmlspecialchars($success); ?></span>
+            </div>
+        <?php endif; ?>
+
+        <section id="manage-bookings" class="dashboard__section active">
+            <h2 class="section__subheader">Individual Bookings</h2>
+            <div class="table__container">
+                <table class="data__table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>User</th>
+                            <th>Branch</th>
+                            <th>Room</th>
+                            <th>Check-In</th>
+                            <th>Check-Out</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($bookings as $booking): ?>
+                            <tr>
+                                <td><?php echo $booking['id']; ?></td>
+                                <td><?php echo htmlspecialchars($booking['user_name']); ?></td>
+                                <td><?php echo htmlspecialchars($booking['branch_name']); ?></td>
+                                <td><?php echo htmlspecialchars($booking['room_number'] . ' (' . $booking['room_type'] . ')'); ?></td>
+                                <td><?php echo $booking['check_in']; ?></td>
+                                <td><?php echo $booking['check_out']; ?></td>
+                                <td><?php echo htmlspecialchars($booking['status']); ?></td>
+                                <td>
+                                    <form method="POST" style="display:inline;">
+                                        <input type="hidden" name="booking_id" value="<?php echo $booking['id']; ?>">
+                                        <select name="status" required>
+                                            <option value="pending" <?php echo $booking['status'] == 'pending' ? 'selected' : ''; ?>>Pending</option>
+                                            <option value="confirmed" <?php echo $booking['status'] == 'confirmed' ? 'selected' : ''; ?>>Confirmed</option>
+                                            <option value="cancelled" <?php echo $booking['status'] == 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
+                                        </select>
+                                        <button type="submit" name="update_booking" class="btn btn--primary">Update</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="manage-group-bookings" class="dashboard__section">
+            <h2 class="section__subheader">Group Bookings</h2>
+            <div class="table__container">
+                <table class="data__table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Company</th>
+                            <th>Branch</th>
+                            <th>Room Count</th>
+                            <th>Room Type</th>
+                            <th>Check-In</th>
+                            <th>Check-Out</th>
+                            <th>Discount</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($group_bookings as $gb): ?>
+                            <tr>
+                                <td><?php echo $gb['id']; ?></td>
+                                <td><?php echo htmlspecialchars($gb['company_name']); ?></td>
+                                <td><?php echo htmlspecialchars($gb['branch_name']); ?></td>
+                                <td><?php echo $gb['room_count']; ?></td>
+                                <td><?php echo htmlspecialchars($gb['room_type']); ?></td>
+                                <td><?php echo $gb['check_in_date']; ?></td>
+                                <td><?php echo $gb['check_out_date']; ?></td>
+                                <td><?php echo number_format($gb['discount_rate'], 2); ?>%</td>
+                                <td><?php echo htmlspecialchars($gb['status']); ?></td>
+                                <td>
+                                    <form method="POST" style="display:inline;">
+                                        <input type="hidden" name="group_booking_id" value="<?php echo $gb['id']; ?>">
+                                        <select name="status" required>
+                                            <option value="pending" <?php echo $gb['status'] == 'pending' ? 'selected' : ''; ?>>Pending</option>
+                                            <option value="confirmed" <?php echo $gb['status'] == 'confirmed' ? 'selected' : ''; ?>>Confirmed</option>
+                                            <option value="cancelled" <?php echo $gb['status'] == 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
+                                        </select>
+                                        <button type="submit" name="update_group_booking" class="btn btn--primary">Update</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</div>
+
+<style>
+.table__container {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-top: 1.5rem;
+}
+.data__table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.data__table th, .data__table td {
+    padding: 1rem;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
+}
+.data__table th {
+    background: #f9fafb;
+    font-weight: 600;
+    color: #374151;
+}
+</style>
+
+<script>
+function showSection(sectionId) {
+    const sections = document.querySelectorAll('.dashboard__section');
+    sections.forEach(section => section.classList.remove('active'));
+    document.getElementById(sectionId).classList.add('active');
+}
+
+document.getElementById('sidebar-toggle')?.addEventListener('click', function() {
+    document.getElementById('sidebar').classList.toggle('collapsed');
+});
+</script>
+
+<?php include 'templates/footer.php'; ?>
