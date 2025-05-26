@@ -15,6 +15,7 @@ if (session_status() === PHP_SESSION_NONE) {
     <script src="https://unpkg.com/scrollreveal"></script>
     <script src="/hotel_chain_management/assets/js/main.js" defer></script>
     <script src="/hotel_chain_management/assets/js/script.js" defer></script>
+    <script src="/hotel_chain_management/assets/js/dashboard.js" defer></script>
 </head>
 <body>
     <div class="container mx-auto">

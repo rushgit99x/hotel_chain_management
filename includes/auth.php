@@ -32,7 +32,7 @@ function processLogin($pdo) {
                 $_SESSION['role'] = $user['role'];
                 error_log("Login successful for user: " . $email . ", role: " . $user['role']);
                 if ($user['role'] == 'super_admin') {
-                    header("Location: admin_portal.php");
+                    header("Location: admin_dashboard.php");
                 } elseif ($user['role'] == 'manager') {
                     header("Location: manager_portal.php");
                 } else {
