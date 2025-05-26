@@ -50,22 +50,11 @@ include 'templates/header.php';
         <nav class="sidebar__nav">
             <ul class="sidebar__links">
                 <li><a href="admin_dashboard.php" class="sidebar__link"><i class="ri-dashboard-line"></i><span>Dashboard</span></a></li>
-                <li><a href="#create-branch" class="sidebar__link" onclick="showSection('create-branch')"><i class="ri-building-line"></i><span>Create Branch</span></a></li>
-                <li><a href="#create-user" class="sidebar__link" onclick="showSection('create-user')"><i class="ri-user-add-line"></i><span>Create User</span></a></li>
-                <li><a href="#create-room" class="sidebar__link" onclick="showSection('create-room')"><i class="ri-home-line"></i><span>Add Room</span></a></li>
-                <li>
-                    <a href="manage_rooms.php" class="sidebar__link">
-                        <i class="ri-home-gear-line"></i>
-                        <span>Manage Rooms</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="#create-room-type" class="sidebar__link" onclick="showSection('create-room-type')">
-                        <i class="ri-home-2-line"></i>
-                        <span>Manage Room Types</span>
-                    </a>
-                </li>
-                <li>
+                <li><a href="create_branch.php" class="sidebar__link"><i class="ri-building-line"></i><span>Create Branch</span></a></li>
+                <li><a href="create_user.php" class="sidebar__link"><i class="ri-user-add-line"></i><span>Create User</span></a></li>
+                <li><a href="create_room.php" class="sidebar__link"><i class="ri-home-line"></i><span>Add Room</span></a></li>
+                <li><a href="manage_rooms.php" class="sidebar__link"><i class="ri-home-gear-line"></i><span>Manage Rooms</span></a></li>
+                <li><a href="create_room_type.php" class="sidebar__link"><i class="ri-home-2-line"></i><span>Manage Room Types</span></a></li>
                 <li><a href="manage_hotels.php" class="sidebar__link"><i class="ri-building-line"></i><span>Manage Hotels</span></a></li>
                 <li><a href="manage_users.php" class="sidebar__link"><i class="ri-user-line"></i><span>Manage Users</span></a></li>
                 <li><a href="manage_bookings.php" class="sidebar__link"><i class="ri-calendar-check-line"></i><span>Manage Bookings</span></a></li>
