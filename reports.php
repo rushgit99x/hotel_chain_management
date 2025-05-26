@@ -9,25 +9,41 @@ checkAuth('super_admin');
 require_once 'db_connect.php';
 
 try {
-    // Total revenue from bookings (assuming price from rooms table)
-    $stmt = $pdo->query("SELECT SUM(r.price * DATEDIFF(b.check_out, b.check_in)) as total_revenue 
-                         FROM bookings b 
-                         JOIN rooms r ON b.room_id = r.id 
-                         WHERE b.status = 'confirmed'");
+    // Total revenue from confirmed bookings (using base_price from room_types)
+    $stmt = $pdo->query("
+        SELECT SUM(rt.base_price * DATEDIFF(b.check_out, b.check_in)) as total_revenue 
+        FROM bookings b 
+        JOIN rooms r ON b.room_id = r.id 
+        JOIN room_types rt ON r.room_type_id = rt.id 
+        WHERE b.status = 'confirmed'
+    ");
     $total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total_revenue'] ?? 0;
 
-    // Occupancy rate (confirmed bookings vs total rooms)
-    $stmt = $pdo->query("SELECT COUNT(*) as confirmed_bookings FROM bookings WHERE status = 'confirmed'");
+    // Occupancy rate (confirmed bookings vs total available rooms)
+    $stmt = $pdo->query("
+        SELECT COUNT(*) as confirmed_bookings 
+        FROM bookings 
+        WHERE status = 'confirmed' 
+        AND check_in <= CURDATE() 
+        AND check_out >= CURDATE()
+    ");
     $confirmed_bookings = $stmt->fetch(PDO::FETCH_ASSOC)['confirmed_bookings'] ?? 0;
-    $stmt = $pdo->query("SELECT COUNT(*) as total_rooms FROM rooms");
+
+    $stmt = $pdo->query("
+        SELECT COUNT(*) as total_rooms 
+        FROM rooms 
+        WHERE status = 'available'
+    ");
     $total_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['total_rooms'] ?? 1;
-    $occupancy_rate = ($confirmed_bookings / $total_rooms) * 100;
+    $occupancy_rate = ($total_rooms > 0) ? ($confirmed_bookings / $total_rooms) * 100 : 0;
 
     // Bookings by branch
-    $stmt = $pdo->query("SELECT b.name, COUNT(bo.id) as booking_count 
-                         FROM branches b 
-                         LEFT JOIN bookings bo ON b.id = bo.branch_id 
-                         GROUP BY b.id, b.name");
+    $stmt = $pdo->query("
+        SELECT b.name, COUNT(bo.id) as booking_count 
+        FROM branches b 
+        LEFT JOIN bookings bo ON b.id = bo.branch_id 
+        GROUP BY b.id, b.name
+    ");
     $bookings_by_branch = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $error = "Error fetching data: " . $e->getMessage();
@@ -51,6 +67,19 @@ include 'templates/header.php';
                 <li><a href="#create-branch" class="sidebar__link" onclick="showSection('create-branch')"><i class="ri-building-line"></i><span>Create Branch</span></a></li>
                 <li><a href="#create-user" class="sidebar__link" onclick="showSection('create-user')"><i class="ri-user-add-line"></i><span>Create User</span></a></li>
                 <li><a href="#create-room" class="sidebar__link" onclick="showSection('create-room')"><i class="ri-home-line"></i><span>Add Room</span></a></li>
+                <li>
+                    <a href="manage_rooms.php" class="sidebar__link">
+                        <i class="ri-home-gear-line"></i>
+                        <span>Manage Rooms</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#create-room-type" class="sidebar__link" onclick="showSection('create-room-type')">
+                        <i class="ri-home-2-line"></i>
+                        <span>Manage Room Types</span>
+                    </a>
+                </li>
+                <li>
                 <li><a href="manage_hotels.php" class="sidebar__link"><i class="ri-building-line"></i><span>Manage Hotels</span></a></li>
                 <li><a href="manage_users.php" class="sidebar__link"><i class="ri-user-line"></i><span>Manage Users</span></a></li>
                 <li><a href="manage_bookings.php" class="sidebar__link"><i class="ri-calendar-check-line"></i><span>Manage Bookings</span></a></li>

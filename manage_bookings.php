@@ -11,39 +11,65 @@ require_once 'db_connect.php';
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (isset($_POST['update_booking'])) {
         $booking_id = (int)$_POST['booking_id'];
-        $status = $_POST['status'];
+        $status = sanitize($_POST['status']);
         try {
+            // Validate status
+            if (!in_array($status, ['pending', 'confirmed', 'cancelled'])) {
+                throw new Exception("Invalid status value.");
+            }
+            // If confirming, check room availability
+            if ($status === 'confirmed') {
+                $stmt = $pdo->prepare("SELECT r.status FROM bookings b JOIN rooms r ON b.room_id = r.id WHERE b.id = ?");
+                $stmt->execute([$booking_id]);
+                $room_status = $stmt->fetchColumn();
+                if ($room_status !== 'available') {
+                    throw new Exception("Cannot confirm booking: Room is not available.");
+                }
+            }
             $stmt = $pdo->prepare("UPDATE bookings SET status = ? WHERE id = ?");
             $stmt->execute([$status, $booking_id]);
+            // Update room status if booking is confirmed or cancelled
+            if ($status === 'confirmed') {
+                $stmt = $pdo->prepare("UPDATE rooms SET status = 'occupied' WHERE id = (SELECT room_id FROM bookings WHERE id = ?)");
+                $stmt->execute([$booking_id]);
+            } elseif ($status === 'cancelled') {
+                $stmt = $pdo->prepare("UPDATE rooms SET status = 'available' WHERE id = (SELECT room_id FROM bookings WHERE id = ?)");
+                $stmt->execute([$booking_id]);
+            }
             $success = "Booking updated successfully!";
-        } catch (PDOException $e) {
+        } catch (Exception $e) {
             $error = "Error updating booking: " . $e->getMessage();
         }
     } elseif (isset($_POST['update_group_booking'])) {
         $group_booking_id = (int)$_POST['group_booking_id'];
-        $status = $_POST['status'];
+        $status = sanitize($_POST['status']);
         try {
+            // Validate status
+            if (!in_array($status, ['pending', 'confirmed', 'cancelled'])) {
+                throw new Exception("Invalid status value.");
+            }
             $stmt = $pdo->prepare("UPDATE group_bookings SET status = ? WHERE id = ?");
             $stmt->execute([$status, $group_booking_id]);
             $success = "Group booking updated successfully!";
-        } catch (PDOException $e) {
+        } catch (Exception $e) {
             $error = "Error updating group booking: " . $e->getMessage();
         }
     }
 }
 
 try {
-    $stmt = $pdo->query("SELECT b.*, u.name AS user_name, r.room_number, r.type AS room_type, br.name AS branch_name 
+    $stmt = $pdo->query("SELECT b.*, u.name AS user_name, r.room_number, rt.name AS room_type_name, br.name AS branch_name 
                          FROM bookings b 
                          JOIN users u ON b.user_id = u.id 
                          JOIN rooms r ON b.room_id = r.id 
                          JOIN branches br ON b.branch_id = br.id 
+                         LEFT JOIN room_types rt ON r.room_type_id = rt.id 
                          ORDER BY b.created_at DESC");
     $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $stmt = $pdo->query("SELECT gb.*, c.company_name, br.name AS branch_name 
+    $stmt = $pdo->query("SELECT gb.*, cp.company_name, br.name AS branch_name 
                          FROM group_bookings gb 
-                         JOIN company_profiles c ON gb.company_id = c.id 
+                         JOIN company_profiles cp ON gb.company_id = cp.id 
                          JOIN branches br ON gb.hotel_id = br.id 
                          ORDER BY gb.created_at DESC");
     $group_bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -69,6 +95,19 @@ include 'templates/header.php';
                 <li><a href="#create-branch" class="sidebar__link" onclick="showSection('create-branch')"><i class="ri-building-line"></i><span>Create Branch</span></a></li>
                 <li><a href="#create-user" class="sidebar__link" onclick="showSection('create-user')"><i class="ri-user-add-line"></i><span>Create User</span></a></li>
                 <li><a href="#create-room" class="sidebar__link" onclick="showSection('create-room')"><i class="ri-home-line"></i><span>Add Room</span></a></li>
+                <li>
+                    <a href="manage_rooms.php" class="sidebar__link">
+                        <i class="ri-home-gear-line"></i>
+                        <span>Manage Rooms</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#create-room-type" class="sidebar__link" onclick="showSection('create-room-type')">
+                        <i class="ri-home-2-line"></i>
+                        <span>Manage Room Types</span>
+                    </a>
+                </li>
+                <li>
                 <li><a href="manage_hotels.php" class="sidebar__link"><i class="ri-building-line"></i><span>Manage Hotels</span></a></li>
                 <li><a href="manage_users.php" class="sidebar__link"><i class="ri-user-line"></i><span>Manage Users</span></a></li>
                 <li><a href="manage_bookings.php" class="sidebar__link active"><i class="ri-calendar-check-line"></i><span>Manage Bookings</span></a></li>
@@ -122,7 +161,7 @@ include 'templates/header.php';
                                 <td><?php echo $booking['id']; ?></td>
                                 <td><?php echo htmlspecialchars($booking['user_name']); ?></td>
                                 <td><?php echo htmlspecialchars($booking['branch_name']); ?></td>
-                                <td><?php echo htmlspecialchars($booking['room_number'] . ' (' . $booking['room_type'] . ')'); ?></td>
+                                <td><?php echo htmlspecialchars($booking['room_number'] . ' (' . ($booking['room_type_name'] ?? 'Not Assigned') . ')'); ?></td>
                                 <td><?php echo $booking['check_in']; ?></td>
                                 <td><?php echo $booking['check_out']; ?></td>
                                 <td><?php echo htmlspecialchars($booking['status']); ?></td>
@@ -139,6 +178,11 @@ include 'templates/header.php';
                                 </td>
                             </tr>
                         <?php endforeach; ?>
+                        <?php if (empty($bookings)): ?>
+                            <tr>
+                                <td colspan="8">No individual bookings found.</td>
+                            </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
@@ -166,7 +210,7 @@ include 'templates/header.php';
                         <?php foreach ($group_bookings as $gb): ?>
                             <tr>
                                 <td><?php echo $gb['id']; ?></td>
-                                <td><?php echo htmlspecialchars($gb['company_name']); ?></td>
+                                <td><?php echo htmlspecialchars($gb['company_name'] ?? 'Unknown'); ?></td>
                                 <td><?php echo htmlspecialchars($gb['branch_name']); ?></td>
                                 <td><?php echo $gb['room_count']; ?></td>
                                 <td><?php echo htmlspecialchars($gb['room_type']); ?></td>
@@ -187,6 +231,11 @@ include 'templates/header.php';
                                 </td>
                             </tr>
                         <?php endforeach; ?>
+                        <?php if (empty($group_bookings)): ?>
+                            <tr>
+                                <td colspan="10">No group bookings found.</td>
+                            </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
@@ -215,6 +264,17 @@ include 'templates/header.php';
     background: #f9fafb;
     font-weight: 600;
     color: #374151;
+}
+.btn--primary {
+    background: #2563eb;
+    color: white;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.btn--primary:hover {
+    background: #1d4ed8;
 }
 </style>
 

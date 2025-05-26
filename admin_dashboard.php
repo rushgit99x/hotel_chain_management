@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $email = sanitize($_POST['email']);
         $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
         $role = $_POST['role'];
-        $branch_id = $_POST['branch_id'];
+        $branch_id = $_POST['branch_id'] ?: null;
 
         if ($role !== 'manager' && $role !== 'customer' && $role !== 'travel_company') {
             $error = "Invalid role selected.";
@@ -45,15 +45,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     } elseif (isset($_POST['create_room'])) {
         $branch_id = $_POST['branch_id'];
+        $room_type_id = $_POST['room_type_id'];
         $room_number = sanitize($_POST['room_number']);
-        $type = $_POST['type'];
-        $price = floatval($_POST['price']);
+        $status = $_POST['status'] ?: 'available';
+
         try {
-            $stmt = $pdo->prepare("INSERT INTO rooms (branch_id, room_number, type, price) VALUES (?, ?, ?, ?)");
-            $stmt->execute([$branch_id, $room_number, $type, $price]);
+            $stmt = $pdo->prepare("INSERT INTO rooms (branch_id, room_type_id, room_number, status) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$branch_id, $room_type_id, $room_number, $status]);
             $success = "Room created successfully!";
         } catch (PDOException $e) {
             $error = "Error creating room: " . $e->getMessage();
+        }
+    } elseif (isset($_POST['create_room_type'])) {
+        $name = sanitize($_POST['room_type_name']);
+        $description = sanitize($_POST['description']);
+        $base_price = floatval($_POST['base_price']);
+        $image_path = sanitize($_POST['image_path']) ?: null;
+
+        try {
+            $stmt = $pdo->prepare("INSERT INTO room_types (name, description, base_price, image_path) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$name, $description, $base_price, $image_path]);
+            $success = "Room type created successfully!";
+        } catch (PDOException $e) {
+            $error = "Error creating room type: " . $e->getMessage();
         }
     }
 }
@@ -67,61 +81,40 @@ $total_reservations = 0;
 $total_managers = 0;
 $total_customers = 0;
 $total_travel_companies = 0;
+$total_room_types = 0;
 
 try {
-    // Get total branches
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM branches");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_branches = $result ? $result['count'] : 0;
+    $total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Get total users (excluding super_admin)
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM users WHERE role != 'super_admin'");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_users = $result ? $result['count'] : 0;
+    $total_users = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Get managers count
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM users WHERE role = 'manager'");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_managers = $result ? $result['count'] : 0;
+    $total_managers = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Get customers count
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM users WHERE role = 'customer'");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_customers = $result ? $result['count'] : 0;
+    $total_customers = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Get travel companies count
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM users WHERE role = 'travel_company'");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_travel_companies = $result ? $result['count'] : 0;
+    $total_travel_companies = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Get total rooms
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM rooms");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_rooms = $result ? $result['count'] : 0;
+    $total_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Get total bookings
+    $stmt = $pdo->query("SELECT COUNT(*) as count FROM room_types");
+    $total_room_types = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM bookings");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_bookings = $result ? $result['count'] : 0;
+    $total_bookings = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Get total reservations
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM reservations");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_reservations = $result ? $result['count'] : 0;
+    $total_reservations = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 } catch (PDOException $e) {
-    // Handle database errors - set all to 0
-    $total_branches = 0;
-    $total_users = 0;
-    $total_bookings = 0;
-    $total_rooms = 0;
-    $total_reservations = 0;
-    $total_managers = 0;
-    $total_customers = 0;
-    $total_travel_companies = 0;
-    
-    // Optional: store error for debugging
     $db_error = "Database connection error: " . $e->getMessage();
+    $total_branches = $total_users = $total_bookings = $total_rooms = $total_reservations = 0;
+    $total_managers = $total_customers = $total_travel_companies = $total_room_types = 0;
 }
 
 include 'templates/header.php';
@@ -160,6 +153,18 @@ include 'templates/header.php';
                     <a href="#create-room" class="sidebar__link" onclick="showSection('create-room')">
                         <i class="ri-home-line"></i>
                         <span>Add Room</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="manage_rooms.php" class="sidebar__link">
+                        <i class="ri-home-gear-line"></i>
+                        <span>Manage Rooms</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#create-room-type" class="sidebar__link" onclick="showSection('create-room-type')">
+                        <i class="ri-home-2-line"></i>
+                        <span>Manage Room Types</span>
                     </a>
                 </li>
                 <li>
@@ -240,6 +245,13 @@ include 'templates/header.php';
                     <div class="card__content">
                         <h3>Total Rooms</h3>
                         <p><?php echo $total_rooms; ?></p>
+                    </div>
+                </div>
+                <div class="overview__card">
+                    <i class="ri-home-2-line card__icon"></i>
+                    <div class="card__content">
+                        <h3>Room Types</h3>
+                        <p><?php echo $total_room_types; ?></p>
                     </div>
                 </div>
                 <div class="overview__card">
@@ -330,14 +342,14 @@ include 'templates/header.php';
                         <select id="role" name="role" class="form__select" required>
                             <option value="">Select Role</option>
                             <option value="manager">Manager</option>
-                            <option value="customer">Customer</option>
-                            <option value="travel_company">Travel Company</option>
+                            <option value="clerk">Clerk</option>
+
                         </select>
                     </div>
                     <div class="form__group">
                         <label for="branch_id" class="form__label">Assign to Branch</label>
-                        <select id="branch_id" name="branch_id" class="form__select" required>
-                            <option value="">Select Branch</option>
+                        <select id="branch_id" name="branch_id" class="form__select">
+                            <option value="">Select Branch (Optional)</option>
                             <?php
                             try {
                                 $stmt = $pdo->query("SELECT * FROM branches ORDER BY name");
@@ -380,25 +392,65 @@ include 'templates/header.php';
                         </select>
                     </div>
                     <div class="form__group">
+                        <label for="room_type_id" class="form__label">Room Type</label>
+                        <select id="room_type_id" name="room_type_id" class="form__select" required>
+                            <option value="">Select Room Type</option>
+                            <?php
+                            try {
+                                $stmt = $pdo->query("SELECT * FROM room_types ORDER BY name");
+                                while ($room_type = $stmt->fetch()) {
+                                    echo "<option value='{$room_type['id']}'>{$room_type['name']} (\${$room_type['base_price']}/night)</option>";
+                                }
+                            } catch (PDOException $e) {
+                                echo "<option value=''>Error loading room types</option>";
+                            }
+                            ?>
+                        </select>
+                    </div>
+                    <div class="form__group">
                         <label for="room_number" class="form__label">Room Number</label>
                         <input type="text" id="room_number" name="room_number" class="form__input" required>
                     </div>
                     <div class="form__group">
-                        <label for="type" class="form__label">Room Type</label>
-                        <select id="type" name="type" class="form__select" required>
-                            <option value="">Select Room Type</option>
-                            <option value="single">Single</option>
-                            <option value="double">Double</option>
-                            <option value="suite">Suite</option>
+                        <label for="status" class="form__label">Status</label>
+                        <select id="status" name="status" class="form__select" required>
+                            <option value="available">Available</option>
+                            <option value="occupied">Occupied</option>
+                            <option value="maintenance">Maintenance</option>
                         </select>
-                    </div>
-                    <div class="form__group">
-                        <label for="price" class="form__label">Price per Night ($)</label>
-                        <input type="number" id="price" name="price" step="0.01" min="0" class="form__input" required>
                     </div>
                     <button type="submit" name="create_room" class="btn btn--primary">
                         <i class="ri-home-add-line"></i>
                         Add Room
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Create Room Type Section -->
+        <section id="create-room-type" class="dashboard__section">
+            <h2 class="section__subheader">Manage Room Types</h2>
+            <div class="form__container">
+                <form method="POST" class="admin__form">
+                    <div class="form__group">
+                        <label for="room_type_name" class="form__label">Room Type Name</label>
+                        <input type="text" id="room_type_name" name="room_type_name" class="form__input" required>
+                    </div>
+                    <div class="form__group">
+                        <label for="description" class="form__label">Description</label>
+                        <textarea id="description" name="description" class="form__input" rows="4"></textarea>
+                    </div>
+                    <div class="form__group">
+                        <label for="base_price" class="form__label">Base Price per Night ($)</label>
+                        <input type="number" id="base_price" name="base_price" step="0.01" min="0" class="form__input" required>
+                    </div>
+                    <div class="form__group">
+                        <label for="image_path" class="form__label">Image Path (Optional)</label>
+                        <input type="text" id="image_path" name="image_path" class="form__input">
+                    </div>
+                    <button type="submit" name="create_room_type" class="btn btn--primary">
+                        <i class="ri-home-2-line"></i>
+                        Create Room Type
                     </button>
                 </form>
             </div>
@@ -498,7 +550,8 @@ include 'templates/header.php';
 }
 
 .form__input,
-.form__select {
+.form__select,
+.form__input[type="textarea"] {
     padding: 0.75rem;
     border: 2px solid #e5e7eb;
     border-radius: 8px;
@@ -507,7 +560,8 @@ include 'templates/header.php';
 }
 
 .form__input:focus,
-.form__select:focus {
+.form__select:focus,
+.form__input[type="textarea"]:focus {
     outline: none;
     border-color: #3b82f6;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
@@ -535,6 +589,54 @@ include 'templates/header.php';
 .btn--primary:hover {
     background: #2563eb;
     transform: translateY(-1px);
+}
+
+.btn--secondary {
+    background: #6b7280;
+    color: white;
+}
+
+.btn--secondary:hover {
+    background: #4b5563;
+    transform: translateY(-1px);
+}
+
+.btn--danger {
+    background: #ef4444;
+    color: white;
+}
+
+.btn--danger:hover {
+    background: #dc2626;
+    transform: translateY(-1px);
+}
+
+.btn--small {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1.5rem;
+}
+
+.table th,
+.table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.table th {
+    background: #f9fafb;
+    font-weight: 600;
+    color: #374151;
+}
+
+.table td {
+    color: #1f2937;
 }
 
 .alert {
@@ -574,46 +676,29 @@ include 'templates/header.php';
 
 <script>
 function showSection(sectionId) {
-    // Hide all sections
     const sections = document.querySelectorAll('.dashboard__section');
-    sections.forEach(section => {
-        section.classList.remove('active');
-    });
-    
-    // Show the target section
+    sections.forEach(section => section.classList.remove('active'));
     const targetSection = document.getElementById(sectionId);
-    if (targetSection) {
-        targetSection.classList.add('active');
-    }
+    if (targetSection) targetSection.classList.add('active');
     
-    // Update active sidebar link
     const links = document.querySelectorAll('.sidebar__link');
-    links.forEach(link => {
-        link.classList.remove('active');
-    });
-    
-    // Add active class to clicked link
+    links.forEach(link => link.classList.remove('active'));
     event.target.closest('.sidebar__link').classList.add('active');
 }
 
-// Auto-hide alerts after 5 seconds
 document.addEventListener('DOMContentLoaded', function() {
     const alerts = document.querySelectorAll('.alert');
     alerts.forEach(alert => {
         setTimeout(() => {
             alert.style.opacity = '0';
             alert.style.transform = 'translateY(-10px)';
-            setTimeout(() => {
-                alert.remove();
-            }, 300);
+            setTimeout(() => alert.remove(), 300);
         }, 5000);
     });
-});
 
-// Sidebar toggle functionality
-document.getElementById('sidebar-toggle')?.addEventListener('click', function() {
-    const sidebar = document.getElementById('sidebar');
-    sidebar.classList.toggle('collapsed');
+    document.getElementById('sidebar-toggle')?.addEventListener('click', function() {
+        document.getElementById('sidebar').classList.toggle('collapsed');
+    });
 });
 </script>
 

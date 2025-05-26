@@ -26,20 +26,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } elseif (isset($_POST['delete_branch'])) {
         $branch_id = (int)$_POST['branch_id'];
         try {
-            $stmt = $pdo->prepare("DELETE FROM branches WHERE id = ?");
+            // Check if branch has associated rooms or bookings
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM rooms WHERE branch_id = ?");
             $stmt->execute([$branch_id]);
-            $success = "Branch deleted successfully!";
+            $room_count = $stmt->fetchColumn();
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM bookings WHERE branch_id = ?");
+            $stmt->execute([$branch_id]);
+            $booking_count = $stmt->fetchColumn();
+            if ($room_count > 0 || $booking_count > 0) {
+                $error = "Cannot delete branch with existing rooms or bookings.";
+            } else {
+                $stmt = $pdo->prepare("DELETE FROM branches WHERE id = ?");
+                $stmt->execute([$branch_id]);
+                $success = "Branch deleted successfully!";
+            }
         } catch (PDOException $e) {
             $error = "Error deleting branch: " . $e->getMessage();
         }
     } elseif (isset($_POST['update_room'])) {
         $room_id = (int)$_POST['room_id'];
         $room_number = sanitize($_POST['room_number']);
-        $type = $_POST['type'];
-        $price = floatval($_POST['price']);
+        $room_type_id = (int)$_POST['room_type_id'];
+        $status = sanitize($_POST['status']);
         try {
-            $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, type = ?, price = ? WHERE id = ?");
-            $stmt->execute([$room_number, $type, $price, $room_id]);
+            $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, room_type_id = ?, status = ? WHERE id = ?");
+            $stmt->execute([$room_number, $room_type_id, $status, $room_id]);
             $success = "Room updated successfully!";
         } catch (PDOException $e) {
             $error = "Error updating room: " . $e->getMessage();
@@ -47,21 +58,37 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } elseif (isset($_POST['delete_room'])) {
         $room_id = (int)$_POST['room_id'];
         try {
-            $stmt = $pdo->prepare("DELETE FROM rooms WHERE id = ?");
+            // Check if room has associated bookings
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM bookings WHERE room_id = ?");
             $stmt->execute([$room_id]);
-            $success = "Room deleted successfully!";
+            $booking_count = $stmt->fetchColumn();
+            if ($booking_count > 0) {
+                $error = "Cannot delete room with existing bookings.";
+            } else {
+                $stmt = $pdo->prepare("DELETE FROM rooms WHERE id = ?");
+                $stmt->execute([$room_id]);
+                $success = "Room deleted successfully!";
+            }
         } catch (PDOException $e) {
             $error = "Error deleting room: " . $e->getMessage();
         }
     }
 }
 
-// Fetch all branches and rooms
+// Fetch all branches, rooms, and room types
 try {
     $stmt = $pdo->query("SELECT * FROM branches ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    $stmt = $pdo->query("SELECT r.*, b.name AS branch_name FROM rooms r JOIN branches b ON r.branch_id = b.id ORDER BY b.name, r.room_number");
+    
+    $stmt = $pdo->query("SELECT r.*, b.name AS branch_name, rt.name AS room_type_name, rt.base_price 
+                         FROM rooms r 
+                         JOIN branches b ON r.branch_id = b.id 
+                         LEFT JOIN room_types rt ON r.room_type_id = rt.id 
+                         ORDER BY b.name, r.room_number");
     $rooms = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    $stmt = $pdo->query("SELECT * FROM room_types ORDER BY name");
+    $room_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $error = "Error fetching data: " . $e->getMessage();
 }
@@ -84,6 +111,18 @@ include 'templates/header.php';
                 <li><a href="#create-branch" class="sidebar__link" onclick="showSection('create-branch')"><i class="ri-building-line"></i><span>Create Branch</span></a></li>
                 <li><a href="#create-user" class="sidebar__link" onclick="showSection('create-user')"><i class="ri-user-add-line"></i><span>Create User</span></a></li>
                 <li><a href="#create-room" class="sidebar__link" onclick="showSection('create-room')"><i class="ri-home-line"></i><span>Add Room</span></a></li>
+                 <li>
+                    <a href="manage_rooms.php" class="sidebar__link">
+                        <i class="ri-home-gear-line"></i>
+                        <span>Manage Rooms</span>
+                    </a>
+                </li>
+                  <li>
+                    <a href="#create-room-type" class="sidebar__link" onclick="showSection('create-room-type')">
+                        <i class="ri-home-2-line"></i>
+                        <span>Manage Room Types</span>
+                    </a>
+                </li>
                 <li><a href="manage_hotels.php" class="sidebar__link active"><i class="ri-building-line"></i><span>Manage Hotels</span></a></li>
                 <li><a href="manage_users.php" class="sidebar__link"><i class="ri-user-line"></i><span>Manage Users</span></a></li>
                 <li><a href="manage_bookings.php" class="sidebar__link"><i class="ri-calendar-check-line"></i><span>Manage Bookings</span></a></li>
@@ -158,7 +197,7 @@ include 'templates/header.php';
                             <th>ID</th>
                             <th>Branch</th>
                             <th>Room Number</th>
-                            <th>Type</th>
+                            <th>Room Type</th>
                             <th>Price</th>
                             <th>Status</th>
                             <th>Actions</th>
@@ -170,19 +209,26 @@ include 'templates/header.php';
                                 <td><?php echo $room['id']; ?></td>
                                 <td><?php echo htmlspecialchars($room['branch_name']); ?></td>
                                 <td><?php echo htmlspecialchars($room['room_number']); ?></td>
-                                <td><?php echo htmlspecialchars($room['type']); ?></td>
-                                <td>$<?php echo number_format($room['price'], 2); ?></td>
+                                <td><?php echo htmlspecialchars($room['room_type_name'] ?? 'Not Assigned'); ?></td>
+                                <td><?php echo isset($room['base_price']) ? '$' . number_format($room['base_price'], 2) : 'N/A'; ?></td>
                                 <td><?php echo htmlspecialchars($room['status']); ?></td>
                                 <td>
                                     <form method="POST" style="display:inline;">
                                         <input type="hidden" name="room_id" value="<?php echo $room['id']; ?>">
                                         <input type="text" name="room_number" value="<?php echo htmlspecialchars($room['room_number']); ?>" required>
-                                        <select name="type" required>
-                                            <option value="single" <?php echo $room['type'] == 'single' ? 'selected' : ''; ?>>Single</option>
-                                            <option value="double" <?php echo $room['type'] == 'double' ? 'selected' : ''; ?>>Double</option>
-                                            <option value="suite" <?php echo $room['type'] == 'suite' ? 'selected' : ''; ?>>Suite</option>
+                                        <select name="room_type_id" required>
+                                            <option value="0" <?php echo $room['room_type_id'] == 0 ? 'selected' : ''; ?>>Not Assigned</option>
+                                            <?php foreach ($room_types as $type): ?>
+                                                <option value="<?php echo $type['id']; ?>" <?php echo $room['room_type_id'] == $type['id'] ? 'selected' : ''; ?>>
+                                                    <?php echo htmlspecialchars($type['name']); ?>
+                                                </option>
+                                            <?php endforeach; ?>
                                         </select>
-                                        <input type="number" name="price" step="0.01" min="0" value="<?php echo $room['price']; ?>" required>
+                                        <select name="status" required>
+                                            <option value="available" <?php echo $room['status'] == 'available' ? 'selected' : ''; ?>>Available</option>
+                                            <option value="occupied" <?php echo $room['status'] == 'occupied' ? 'selected' : ''; ?>>Occupied</option>
+                                            <option value="maintenance" <?php echo $room['status'] == 'maintenance' ? 'selected' : ''; ?>>Maintenance</option>
+                                        </select>
                                         <button type="submit" name="update_room" class="btn btn--primary">Update</button>
                                         <button type="submit" name="delete_room" class="btn btn--danger" onclick="return confirm('Are you sure you want to delete this room?');">Delete</button>
                                     </form>
