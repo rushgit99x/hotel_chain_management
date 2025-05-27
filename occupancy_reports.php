@@ -28,12 +28,20 @@ if (!$branch_id) {
     $db_error = "No branch assigned to this manager.";
 }
 
-// Dashboard metrics
+// Initialize date range
+$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-d', strtotime('-30 days'));
+$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-d');
+
+// Validate dates
+if (!strtotime($start_date) || !strtotime($end_date)) {
+    $start_date = date('Y-m-d', strtotime('-30 days'));
+    $end_date = date('Y-m-d');
+}
+
+// Fetch occupancy data
+$occupancy_data = [];
 $total_rooms = 0;
 $occupied_rooms = 0;
-$total_bookings = 0;
-$total_reservations = 0;
-$daily_revenue = 0;
 $occupancy_rate = 0;
 
 try {
@@ -42,38 +50,38 @@ try {
     $stmt->execute([$branch_id]);
     $total_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Occupied rooms
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM rooms WHERE branch_id = ? AND status = 'occupied'");
-    $stmt->execute([$branch_id]);
-    $occupied_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-    // Occupancy rate
-    $occupancy_rate = $total_rooms > 0 ? round(($occupied_rooms / $total_rooms) * 100, 2) : 0;
-
-    // Total bookings
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM bookings WHERE branch_id = ?");
-    $stmt->execute([$branch_id]);
-    $total_bookings = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-    // Total reservations
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM reservations WHERE hotel_id = ?");
-    $stmt->execute([$branch_id]);
-    $total_reservations = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-    // Daily revenue (based on bookings for today)
+    // Fetch bookings within the date range
     $stmt = $pdo->prepare("
-        SELECT SUM(rt.base_price) as revenue
+        SELECT b.id, b.check_in, b.check_out, b.status, r.room_number, rt.name as room_type
         FROM bookings b
         JOIN rooms r ON b.room_id = r.id
         JOIN room_types rt ON r.room_type_id = rt.id
-        WHERE b.branch_id = ? AND b.check_in = CURDATE()
+        WHERE b.branch_id = ? 
+        AND b.check_in <= ? 
+        AND b.check_out >= ? 
+        AND b.status IN ('pending', 'confirmed')
     ");
-    $stmt->execute([$branch_id]);
-    $daily_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
+    $stmt->execute([$branch_id, $end_date, $start_date]);
+    $occupancy_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Calculate occupied rooms (considering bookings overlapping with the date range)
+    $stmt = $pdo->prepare("
+        SELECT COUNT(DISTINCT r.id) as count
+        FROM rooms r
+        JOIN bookings b ON r.id = b.room_id
+        WHERE r.branch_id = ?
+        AND b.check_in <= ?
+        AND b.check_out >= ?
+        AND b.status IN ('pending', 'confirmed')
+    ");
+    $stmt->execute([$branch_id, $end_date, $start_date]);
+    $occupied_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    // Calculate occupancy rate
+    $occupancy_rate = $total_rooms > 0 ? round(($occupied_rooms / $total_rooms) * 100, 2) : 0;
 
 } catch (PDOException $e) {
     $db_error = "Database connection error: " . $e->getMessage();
-    $total_rooms = $occupied_rooms = $total_bookings = $total_reservations = $daily_revenue = $occupancy_rate = 0;
 }
 
 include 'templates/header.php';
@@ -91,13 +99,13 @@ include 'templates/header.php';
         <nav class="sidebar__nav">
             <ul class="sidebar__links">
                 <li>
-                    <a href="manager_dashboard.php" class="sidebar__link active">
+                    <a href="manager_dashboard.php" class="sidebar__link">
                         <i class="ri-dashboard-line"></i>
                         <span>Dashboard</span>
                     </a>
                 </li>
                 <li>
-                    <a href="occupancy_reports.php" class="sidebar__link">
+                    <a href="occupancy_reports.php" class="sidebar__link active">
                         <i class="ri-bar-chart-line"></i>
                         <span>Occupancy Reports</span>
                     </a>
@@ -127,7 +135,7 @@ include 'templates/header.php';
                     </a>
                 </li>
                 <li>
-                    <a href="manage_branch_bookings.php" class="sidebar__link">
+                    <a href="manage_bookings.php" class="sidebar__link">
                         <i class="ri-calendar-check-line"></i>
                         <span>Manage Bookings</span>
                     </a>
@@ -156,19 +164,31 @@ include 'templates/header.php';
 
     <main class="dashboard__content">
         <header class="dashboard__header">
-            <h1 class="section__header"><?php echo htmlspecialchars($branch_name); ?></h1>
+            <h1 class="section__header"><?php echo htmlspecialchars($branch_name); ?> - Occupancy Report</h1>
             <div class="user__info">
                 <span>Welcome, <?php echo htmlspecialchars($_SESSION['username'] ?? 'Manager'); ?></span>
                 <img src="/hotel_chain_management/assets/images/avatar.png?v=<?php echo time(); ?>" alt="avatar" class="user__avatar" />
             </div>
         </header>
 
-        <!-- Overview Section -->
-        <section id="overview" class="dashboard__section active">
-            <h2 class="section__subheader">Branch Overview</h2>
+        <section id="occupancy-report" class="dashboard__section active">
+            <h2 class="section__subheader">Occupancy Report</h2>
             <?php if (isset($db_error)): ?>
                 <p class="error"><?php echo htmlspecialchars($db_error); ?></p>
             <?php endif; ?>
+
+            <!-- Date Range Filter -->
+            <div class="filter__container">
+                <form method="GET" action="occupancy_reports.php">
+                    <label for="start_date">Start Date:</label>
+                    <input type="date" id="start_date" name="start_date" value="<?php echo htmlspecialchars($start_date); ?>" required>
+                    <label for="end_date">End Date:</label>
+                    <input type="date" id="end_date" name="end_date" value="<?php echo htmlspecialchars($end_date); ?>" required>
+                    <button type="submit" class="btn btn--primary">Filter</button>
+                </form>
+            </div>
+
+            <!-- Summary Cards -->
             <div class="overview__cards">
                 <div class="overview__card">
                     <i class="ri-home-line card__icon"></i>
@@ -191,34 +211,124 @@ include 'templates/header.php';
                         <p><?php echo $occupancy_rate; ?>%</p>
                     </div>
                 </div>
-                <div class="overview__card">
-                    <i class="ri-calendar-check-line card__icon"></i>
-                    <div class="card__content">
-                        <h3>Bookings</h3>
-                        <p><?php echo $total_bookings; ?></p>
-                    </div>
-                </div>
-                <div class="overview__card">
-                    <i class="ri-calendar-line card__icon"></i>
-                    <div class="card__content">
-                        <h3>Reservations</h3>
-                        <p><?php echo $total_reservations; ?></p>
-                    </div>
-                </div>
-                <div class="overview__card">
-                    <i class="ri-money-dollar-circle-line card__icon"></i>
-                    <div class="card__content">
-                        <h3>Daily Revenue</h3>
-                        <p>$<?php echo number_format($daily_revenue, 2); ?></p>
-                    </div>
-                </div>
+            </div>
+
+            <!-- Occupancy Details Table -->
+            <div class="table__container">
+                <h3 class="table__header">Booking Details</h3>
+                <table class="data__table">
+                    <thead>
+                        <tr>
+                            <th>Booking ID</th>
+                            <th>Room Number</th>
+                            <th>Room Type</th>
+                            <th>Check-In</th>
+                            <th>Check-Out</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($occupancy_data)): ?>
+                            <tr>
+                                <td colspan="6">No bookings found for the selected date range.</td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($occupancy_data as $booking): ?>
+                                <tr>
+                                    <td><?php echo htmlspecialchars($booking['id']); ?></td>
+                                    <td><?php echo htmlspecialchars($booking['room_number']); ?></td>
+                                    <td><?php echo htmlspecialchars($booking['room_type']); ?></td>
+                                    <td><?php echo htmlspecialchars($booking['check_in']); ?></td>
+                                    <td><?php echo htmlspecialchars($booking['check_out']); ?></td>
+                                    <td><?php echo htmlspecialchars($booking['status']); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
             </div>
         </section>
     </main>
 </div>
 
 <style>
-/* Styles for the dashboard */
+/* Styles for the occupancy report */
+.filter__container {
+    margin-bottom: 2rem;
+}
+
+.filter__container form {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.filter__container label {
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.filter__container input[type="date"] {
+    padding: 0.5rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 1rem;
+}
+
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.btn--primary {
+    background: #3b82f6;
+    color: white;
+}
+
+.btn--primary:hover {
+    background: #2563eb;
+}
+
+.table__container {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-top: 2rem;
+}
+
+.table__header {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #1f2937;
+    margin-bottom: 1rem;
+}
+
+.data__table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data__table th,
+.data__table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.data__table th {
+    background: #f9fafb;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.data__table td {
+    color: #4b5563;
+}
+
 .overview__cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -274,16 +384,11 @@ include 'templates/header.php';
     margin-bottom: 1rem;
 }
 
-.dashboard__section.active {
-    display: block;
-}
-
 .error {
     color: red;
     margin-bottom: 1rem;
 }
 
-/* Sidebar styles */
 .sidebar__link.active {
     background: #3b82f6;
     color: white;

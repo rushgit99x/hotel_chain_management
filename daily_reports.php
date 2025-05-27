@@ -28,52 +28,86 @@ if (!$branch_id) {
     $db_error = "No branch assigned to this manager.";
 }
 
-// Dashboard metrics
-$total_rooms = 0;
-$occupied_rooms = 0;
-$total_bookings = 0;
-$total_reservations = 0;
+// Initialize metrics
+$check_ins = 0;
+$check_outs = 0;
+$new_bookings = 0;
+$new_reservations = 0;
 $daily_revenue = 0;
-$occupancy_rate = 0;
 
 try {
-    // Total rooms in the branch
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM rooms WHERE branch_id = ?");
+    // Check-ins today (confirmed bookings and reservations)
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as count
+        FROM bookings
+        WHERE branch_id = ? AND check_in = CURDATE() AND status = 'confirmed'
+        UNION ALL
+        SELECT COUNT(*) as count
+        FROM reservations
+        WHERE hotel_id = ? AND check_in_date = CURDATE() AND status = 'confirmed'
+    ");
+    $stmt->execute([$branch_id, $branch_id]);
+    $check_in_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $check_ins = array_sum(array_column($check_in_results, 'count'));
+
+    // Check-outs today (confirmed bookings and reservations)
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as count
+        FROM bookings
+        WHERE branch_id = ? AND check_out = CURDATE() AND status = 'confirmed'
+        UNION ALL
+        SELECT COUNT(*) as count
+        FROM reservations
+        WHERE hotel_id = ? AND check_out_date = CURDATE() AND status = 'confirmed'
+    ");
+    $stmt->execute([$branch_id, $branch_id]);
+    $check_out_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $check_outs = array_sum(array_column($check_out_results, 'count'));
+
+    // New bookings today
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as count
+        FROM bookings
+        WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+    ");
     $stmt->execute([$branch_id]);
-    $total_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $new_bookings = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Occupied rooms
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM rooms WHERE branch_id = ? AND status = 'occupied'");
+    // New reservations today
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as count
+        FROM reservations
+        WHERE hotel_id = ? AND DATE(created_at) = CURDATE()
+    ");
     $stmt->execute([$branch_id]);
-    $occupied_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $new_reservations = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    // Occupancy rate
-    $occupancy_rate = $total_rooms > 0 ? round(($occupied_rooms / $total_rooms) * 100, 2) : 0;
-
-    // Total bookings
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM bookings WHERE branch_id = ?");
-    $stmt->execute([$branch_id]);
-    $total_bookings = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-    // Total reservations
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM reservations WHERE hotel_id = ?");
-    $stmt->execute([$branch_id]);
-    $total_reservations = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-    // Daily revenue (based on bookings for today)
+    // Daily revenue (based on confirmed bookings checking in today + payments completed today)
     $stmt = $pdo->prepare("
         SELECT SUM(rt.base_price) as revenue
         FROM bookings b
         JOIN rooms r ON b.room_id = r.id
         JOIN room_types rt ON r.room_type_id = rt.id
-        WHERE b.branch_id = ? AND b.check_in = CURDATE()
+        WHERE b.branch_id = ? AND b.check_in = CURDATE() AND b.status = 'confirmed'
     ");
     $stmt->execute([$branch_id]);
-    $daily_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
+    $booking_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
+
+    $stmt = $pdo->prepare("
+        SELECT SUM(p.amount) as revenue
+        FROM payments p
+        WHERE p.status = 'completed' AND DATE(p.created_at) = CURDATE()
+        AND (p.reservation_id IN (SELECT id FROM reservations WHERE hotel_id = ?)
+             OR p.group_booking_id IN (SELECT id FROM group_bookings WHERE hotel_id = ?))
+    ");
+    $stmt->execute([$branch_id, $branch_id]);
+    $payment_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
+
+    $daily_revenue = $booking_revenue + $payment_revenue;
 
 } catch (PDOException $e) {
     $db_error = "Database connection error: " . $e->getMessage();
-    $total_rooms = $occupied_rooms = $total_bookings = $total_reservations = $daily_revenue = $occupancy_rate = 0;
+    $check_ins = $check_outs = $new_bookings = $new_reservations = $daily_revenue = 0;
 }
 
 include 'templates/header.php';
@@ -91,7 +125,7 @@ include 'templates/header.php';
         <nav class="sidebar__nav">
             <ul class="sidebar__links">
                 <li>
-                    <a href="manager_dashboard.php" class="sidebar__link active">
+                    <a href="manager_dashboard.php" class="sidebar__link">
                         <i class="ri-dashboard-line"></i>
                         <span>Dashboard</span>
                     </a>
@@ -115,7 +149,7 @@ include 'templates/header.php';
                     </a>
                 </li>
                 <li>
-                    <a href="daily_reports.php" class="sidebar__link">
+                    <a href="daily_reports.php" class="sidebar__link active">
                         <i class="ri-file-chart-line"></i>
                         <span>Daily Reports</span>
                     </a>
@@ -127,7 +161,7 @@ include 'templates/header.php';
                     </a>
                 </li>
                 <li>
-                    <a href="manage_branch_bookings.php" class="sidebar__link">
+                    <a href="manage_bookings.php" class="sidebar__link">
                         <i class="ri-calendar-check-line"></i>
                         <span>Manage Bookings</span>
                     </a>
@@ -156,53 +190,46 @@ include 'templates/header.php';
 
     <main class="dashboard__content">
         <header class="dashboard__header">
-            <h1 class="section__header"><?php echo htmlspecialchars($branch_name); ?></h1>
+            <h1 class="section__header"><?php echo htmlspecialchars($branch_name); ?> - Daily Report</h1>
             <div class="user__info">
                 <span>Welcome, <?php echo htmlspecialchars($_SESSION['username'] ?? 'Manager'); ?></span>
                 <img src="/hotel_chain_management/assets/images/avatar.png?v=<?php echo time(); ?>" alt="avatar" class="user__avatar" />
             </div>
         </header>
 
-        <!-- Overview Section -->
-        <section id="overview" class="dashboard__section active">
-            <h2 class="section__subheader">Branch Overview</h2>
+        <!-- Daily Reports Section -->
+        <section id="daily-reports" class="dashboard__section active">
+            <h2 class="section__subheader">Daily Report - <?php echo date('l, M d, Y'); ?></h2>
             <?php if (isset($db_error)): ?>
                 <p class="error"><?php echo htmlspecialchars($db_error); ?></p>
             <?php endif; ?>
             <div class="overview__cards">
                 <div class="overview__card">
-                    <i class="ri-home-line card__icon"></i>
+                    <i class="ri-login-circle-line card__icon"></i>
                     <div class="card__content">
-                        <h3>Total Rooms</h3>
-                        <p><?php echo $total_rooms; ?></p>
+                        <h3>Check-Ins Today</h3>
+                        <p><?php echo $check_ins; ?></p>
                     </div>
                 </div>
                 <div class="overview__card">
-                    <i class="ri-home-fill card__icon"></i>
+                    <i class="ri-logout-circle-line card__icon"></i>
                     <div class="card__content">
-                        <h3>Occupied Rooms</h3>
-                        <p><?php echo $occupied_rooms; ?></p>
-                    </div>
-                </div>
-                <div class="overview__card">
-                    <i class="ri-percent-line card__icon"></i>
-                    <div class="card__content">
-                        <h3>Occupancy Rate</h3>
-                        <p><?php echo $occupancy_rate; ?>%</p>
+                        <h3>Check-Outs Today</h3>
+                        <p><?php echo $check_outs; ?></p>
                     </div>
                 </div>
                 <div class="overview__card">
                     <i class="ri-calendar-check-line card__icon"></i>
                     <div class="card__content">
-                        <h3>Bookings</h3>
-                        <p><?php echo $total_bookings; ?></p>
+                        <h3>New Bookings Today</h3>
+                        <p><?php echo $new_bookings; ?></p>
                     </div>
                 </div>
                 <div class="overview__card">
                     <i class="ri-calendar-line card__icon"></i>
                     <div class="card__content">
-                        <h3>Reservations</h3>
-                        <p><?php echo $total_reservations; ?></p>
+                        <h3>New Reservations Today</h3>
+                        <p><?php echo $new_reservations; ?></p>
                     </div>
                 </div>
                 <div class="overview__card">
@@ -218,7 +245,7 @@ include 'templates/header.php';
 </div>
 
 <style>
-/* Styles for the dashboard */
+/* Styles for the daily reports page */
 .overview__cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
