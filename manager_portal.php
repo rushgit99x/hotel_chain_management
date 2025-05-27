@@ -4,22 +4,38 @@ include 'templates/header.php';
 checkAuth('manager');
 
 $branch_id = getUserBranch($pdo, $_SESSION['user_id']);
+$success = '';
+$error = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    if (isset($_POST['create_clerk'])) {
-        $name = sanitize($_POST['name']);
-        $email = sanitize($_POST['email']);
-        $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare("INSERT INTO users (name, email, password, role, branch_id) VALUES (?, ?, ?, 'clerk', ?)");
-        $stmt->execute([$name, $email, $password, $branch_id]);
-        $success = "Clerk created successfully!";
-    } elseif (isset($_POST['create_room'])) {
-        $room_number = sanitize($_POST['room_number']);
-        $type = $_POST['type'];
-        $price = floatval($_POST['price']);
-        $stmt = $pdo->prepare("INSERT INTO rooms (branch_id, room_number, type, price) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$branch_id, $room_number, $type, $price]);
-        $success = "Room created successfully!";
+    try {
+        if (isset($_POST['create_clerk'])) {
+            $name = sanitize($_POST['name']);
+            $email = sanitize($_POST['email']);
+            $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+            $role = $_POST['role'];
+
+            // Validate role (though dropdown limits it to 'clerk')
+            if ($role !== 'clerk') {
+                throw new Exception("Invalid role selected.");
+            }
+
+            $stmt = $pdo->prepare("INSERT INTO users (name, email, password, role, branch_id) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute([$name, $email, $password, $role, $branch_id]);
+            $success = "Clerk created successfully!";
+        } elseif (isset($_POST['create_room'])) {
+            $room_number = sanitize($_POST['room_number']);
+            $type = $_POST['type'];
+            $price = floatval($_POST['price']);
+
+            $stmt = $pdo->prepare("INSERT INTO rooms (branch_id, room_number, type, price) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$branch_id, $room_number, $type, $price]);
+            $success = "Room created successfully!";
+        }
+    } catch (PDOException $e) {
+        $error = "Error: " . $e->getMessage();
+    } catch (Exception $e) {
+        $error = "Error: " . $e->getMessage();
     }
 }
 ?>
@@ -45,6 +61,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             <div class="mb-4">
                 <label for="password" class="block text-gray-700">Password</label>
                 <input type="password" id="password" name="password" class="w-full p-2 border rounded" required>
+            </div>
+            <div class="mb-4">
+                <label for="role" class="block text-gray-700">Role</label>
+                <select id="role" name="role" class="w-full p-2 border rounded" required>
+                    <option value="clerk">Clerk</option>
+                </select>
             </div>
             <button type="submit" name="create_clerk" class="bg-blue-500 text-white p-2 rounded hover:bg-blue-600">Add Clerk</button>
         </form>

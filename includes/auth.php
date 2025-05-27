@@ -34,7 +34,7 @@ function processLogin($pdo) {
                 if ($user['role'] == 'super_admin') {
                     header("Location: admin_dashboard.php");
                 } elseif ($user['role'] == 'manager') {
-                    header("Location: manager_portal.php");
+                    header("Location: manager_dashboard.php");
                 } else {
                     header("Location: customer_dashboard.php");
                 }

@@ -54,4 +54,29 @@ if (!function_exists('getUserBranch')) {
         return $stmt->fetchColumn();
     }
 }
+function get_manager_branch_id($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT branch_id FROM users WHERE id = ? AND role = 'manager'");
+        $stmt->execute([$user_id]);
+        return $stmt->fetch(PDO::FETCH_ASSOC)['branch_id'] ?? 0;
+    } catch (PDOException $e) {
+        return 0;
+    }
+}
+
+function get_occupancy_rate($pdo, $branch_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM rooms WHERE branch_id = ?");
+        $stmt->execute([$branch_id]);
+        $total_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+        $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM rooms WHERE branch_id = ? AND status = 'occupied'");
+        $stmt->execute([$branch_id]);
+        $occupied_rooms = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+        return $total_rooms > 0 ? round(($occupied_rooms / $total_rooms) * 100, 2) : 0;
+    } catch (PDOException $e) {
+        return 0;
+    }
+}
 ?>

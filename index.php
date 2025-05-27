@@ -24,7 +24,8 @@ include 'templates/header.php';
                     <?php if ($_SESSION['role'] == 'super_admin'): ?>
                         <li><a href="admin_portal.php">Admin Portal</a></li>
                     <?php elseif ($_SESSION['role'] == 'manager'): ?>
-                        <li><a href="manager_portal.php">Manager Portal</a></li>
+                        <!-- <li><a href="manager_portal.php">Manager Portal</a></li> -->
+                           <li><a href="manager/manager_dashboard.php">Manager Portal</a></li>
                     <?php else: ?>
                         <li><a href="customer_dashboard.php">Dashboard</a></li>
                     <?php endif; ?>

@@ -21,7 +21,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_user'])) {
     $role = $_POST['role'];
     $branch_id = $_POST['branch_id'] ?: null;
 
-    if ($role !== 'manager' && $role !== 'customer' && $role !== 'travel_company') {
+    // Validate role against allowed values
+    $valid_roles = ['manager', 'customer', 'travel_company', 'clerk'];
+    if (!in_array($role, $valid_roles)) {
         $error = "Invalid role selected.";
     } else {
         try {
@@ -168,8 +170,7 @@ include 'templates/header.php';
                         <select id="role" name="role" class="form__select" required>
                             <option value="">Select Role</option>
                             <option value="manager">Manager</option>
-                            <option value="customer">Customer</option>
-                            <option value="travel_company">Travel Company</option>
+                            <option value="clerk">Clerk</option>
                         </select>
                     </div>
                     <div class="form__group">
