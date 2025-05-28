@@ -36,7 +36,7 @@ function processLogin($pdo) {
                 } elseif ($user['role'] == 'manager') {
                     header("Location: manager_dashboard.php");
                 } else {
-                    header("Location: customer_dashboard.php");
+                    header("Location: clerk_dashboard.php");
                 }
                 exit;
             } else {
