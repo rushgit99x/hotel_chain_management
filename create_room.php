@@ -145,7 +145,7 @@ include 'templates/header.php';
         <section class="dashboard__section active">
             <h2 class="section__subheader">Add New Room</h2>
             <div class="form__container">
-                <form method="POST" class="admin__form">
+                <form method="POST" class="admin__form" id="roomForm">
                     <div class="form__group">
                         <label for="room_branch_id" class="form__label">Branch</label>
                         <select id="room_branch_id" name="branch_id" class="form__select" required>
@@ -180,7 +180,11 @@ include 'templates/header.php';
                     </div>
                     <div class="form__group">
                         <label for="room_number" class="form__label">Room Number</label>
-                        <input type="text" id="room_number" name="room_number" class="form__input" required>
+                        <input type="textrequisite text" id="room_number" name="room_number" class="form__input" required>
+                        <span id="roomNumberError" class="alert alert--error" style="display: none;">
+                            <i class="ri-error-warning-line"></i>
+                            <span>Room number already exists for this branch</span>
+                        </span>
                     </div>
                     <div class="form__group">
                         <label for="status" class="form__label">Status</label>
@@ -190,7 +194,7 @@ include 'templates/header.php';
                             <option value="maintenance">Maintenance</option>
                         </select>
                     </div>
-                    <button type="submit" name="create_room" class="btn btn--primary">
+                    <button type="submit" name="create_room" id="submitButton" class="btn btn--primary">
                         <i class="ri-home-add-line"></i>
                         Add Room
                     </button>
@@ -263,7 +267,12 @@ include 'templates/header.php';
     color: white;
 }
 
-.btn--primary:hover {
+.btn--primary:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+}
+
+.btn--primary:hover:not(:disabled) {
     background: #2563eb;
     transform: translateY(-1px);
 }
@@ -320,6 +329,67 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.getElementById('sidebar-toggle')?.addEventListener('click', function() {
         document.getElementById('sidebar').classList.toggle('collapsed');
+    });
+
+    const roomForm = document.getElementById('roomForm');
+    const roomNumberInput = document.getElementById('room_number');
+    const branchSelect = document.getElementById('room_branch_id');
+    const submitButton = document.getElementById('submitButton');
+    const roomNumberError = document.getElementById('roomNumberError');
+    let isRoomNumberValid = false;
+
+    function validateRoomNumber() {
+        const roomNumber = roomNumberInput.value.trim();
+        const branchId = branchSelect.value;
+
+        if (!roomNumber || !branchId) {
+            roomNumberError.style.display = 'none';
+            submitButton.disabled = true;
+            isRoomNumberValid = false;
+            return;
+        }
+
+        fetch('check_room_number.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `room_number=${encodeURIComponent(roomNumber)}&branch_id=${encodeURIComponent(branchId)}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                roomNumberError.textContent = data.error;
+                roomNumberError.style.display = 'flex';
+                submitButton.disabled = true;
+                isRoomNumberValid = false;
+            } else if (data.exists) {
+                roomNumberError.textContent = 'Room number already exists for this branch';
+                roomNumberError.style.display = 'flex';
+                submitButton.disabled = true;
+                isRoomNumberValid = false;
+            } else {
+                roomNumberError.style.display = 'none';
+                submitButton.disabled = false;
+                isRoomNumberValid = true;
+            }
+        })
+        .catch(() => {
+            roomNumberError.textContent = 'Error checking room number';
+            roomNumberError.style.display = 'flex';
+            submitButton.disabled = true;
+            isRoomNumberValid = false;
+        });
+    }
+
+    roomNumberInput.addEventListener('input', validateRoomNumber);
+    branchSelect.addEventListener('change', validateRoomNumber);
+
+    roomForm.addEventListener('submit', function(e) {
+        if (!isRoomNumberValid) {
+            e.preventDefault();
+            roomNumberError.style.display = 'flex';
+        }
     });
 });
 </script>

@@ -9,11 +9,23 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'super_admin') {
     exit();
 }
 
-// Include database connection
+// Include database connection and functions
 require_once 'db_connect.php';
 include_once 'includes/functions.php';
 
-// Handle form submission
+// Initialize variables
+$success = $error = $edit_room_type = null;
+
+// Fetch all room types for display
+try {
+    $stmt = $pdo->query("SELECT * FROM room_types ORDER BY created_at DESC");
+    $room_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $error = "Error fetching room types: " . $e->getMessage();
+    $room_types = [];
+}
+
+// Handle form submission for creating a new room type
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_room_type'])) {
     $name = sanitize($_POST['room_type_name']);
     $description = sanitize($_POST['description']);
@@ -24,8 +36,68 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_room_type'])) {
         $stmt = $pdo->prepare("INSERT INTO room_types (name, description, base_price, image_path) VALUES (?, ?, ?, ?)");
         $stmt->execute([$name, $description, $base_price, $image_path]);
         $success = "Room type created successfully!";
+        header("Location: create_room_type.php");
+        exit();
     } catch (PDOException $e) {
         $error = "Error creating room type: " . $e->getMessage();
+    }
+}
+
+// Handle form submission for updating a room type
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_room_type'])) {
+    $id = (int)$_POST['room_type_id'];
+    $name = sanitize($_POST['room_type_name']);
+    $description = sanitize($_POST['description']);
+    $base_price = floatval($_POST['base_price']);
+    $image_path = sanitize($_POST['image_path']) ?: null;
+
+    try {
+        $stmt = $pdo->prepare("UPDATE room_types SET name = ?, description = ?, base_price = ?, image_path = ? WHERE id = ?");
+        $stmt->execute([$name, $description, $base_price, $image_path, $id]);
+        $success = "Room type updated successfully!";
+        header("Location: create_room_type.php");
+        exit();
+    } catch (PDOException $e) {
+        $error = "Error updating room type: " . $e->getMessage();
+    }
+}
+
+// Handle delete request
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['delete_room_type'])) {
+    $id = (int)$_POST['room_type_id'];
+
+    try {
+        // Check for dependencies in the rooms table
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM rooms WHERE room_type_id = ?");
+        $stmt->execute([$id]);
+        $room_count = $stmt->fetchColumn();
+
+        if ($room_count > 0) {
+            $error = "Cannot delete room type because it is associated with $room_count room(s). Please remove associated rooms first.";
+        } else {
+            $stmt = $pdo->prepare("DELETE FROM room_types WHERE id = ?");
+            $stmt->execute([$id]);
+            $success = "Room type deleted successfully!";
+            header("Location: create_room_type.php");
+            exit();
+        }
+    } catch (PDOException $e) {
+        $error = "Error deleting room type: " . $e->getMessage();
+    }
+}
+
+// Fetch room type for editing if edit_id is provided
+if (isset($_GET['edit_id'])) {
+    $edit_id = (int)$_GET['edit_id'];
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM room_types WHERE id = ?");
+        $stmt->execute([$edit_id]);
+        $edit_room_type = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$edit_room_type) {
+            $error = "Room type not found.";
+        }
+    } catch (PDOException $e) {
+        $error = "Error fetching room type: " . $e->getMessage();
     }
 }
 
@@ -141,32 +213,81 @@ include 'templates/header.php';
             </div>
         <?php endif; ?>
 
-        <!-- Create Room Type Section -->
+        <!-- Create/Edit Room Type Section -->
         <section class="dashboard__section active">
-            <h2 class="section__subheader">Create New Room Type</h2>
+            <h2 class="section__subheader"><?php echo isset($edit_room_type) ? 'Edit Room Type' : 'Create New Room Type'; ?></h2>
             <div class="form__container">
                 <form method="POST" class="admin__form">
+                    <?php if (isset($edit_room_type)): ?>
+                        <input type="hidden" name="room_type_id" value="<?php echo $edit_room_type['id']; ?>">
+                    <?php endif; ?>
                     <div class="form__group">
                         <label for="room_type_name" class="form__label">Room Type Name</label>
-                        <input type="text" id="room_type_name" name="room_type_name" class="form__input" required>
+                        <input type="text" id="room_type_name" name="room_type_name" class="form__input" value="<?php echo isset($edit_room_type) ? htmlspecialchars($edit_room_type['name']) : ''; ?>" required>
                     </div>
                     <div class="form__group">
                         <label for="description" class="form__label">Description</label>
-                        <textarea id="description" name="description" class="form__input" rows="4"></textarea>
+                        <textarea id="description" name="description" class="form__input" rows="4"><?php echo isset($edit_room_type) ? htmlspecialchars($edit_room_type['description']) : ''; ?></textarea>
                     </div>
                     <div class="form__group">
                         <label for="base_price" class="form__label">Base Price per Night ($)</label>
-                        <input type="number" id="base_price" name="base_price" step="0.01" min="0" class="form__input" required>
+                        <input type="number" id="base_price" name="base_price" step="0.01" min="0" class="form__input" value="<?php echo isset($edit_room_type) ? htmlspecialchars($edit_room_type['base_price']) : ''; ?>" required>
                     </div>
                     <div class="form__group">
                         <label for="image_path" class="form__label">Image Path (Optional)</label>
-                        <input type="text" id="image_path" name="image_path" class="form__input">
+                        <input type="text" id="image_path" name="image_path" class="form__input" value="<?php echo isset($edit_room_type) ? htmlspecialchars($edit_room_type['image_path']) : ''; ?>">
                     </div>
-                    <button type="submit" name="create_room_type" class="btn btn--primary">
+                    <button type="submit" name="<?php echo isset($edit_room_type) ? 'update_room_type' : 'create_room_type'; ?>" class="btn btn--primary">
                         <i class="ri-home-2-line"></i>
-                        Create Room Type
+                        <?php echo isset($edit_room_type) ? 'Update Room Type' : 'Create Room Type'; ?>
                     </button>
+                    <?php if (isset($edit_room_type)): ?>
+                        <a href="create_room_type.php" class="btn btn--secondary">Cancel</a>
+                    <?php endif; ?>
                 </form>
+            </div>
+        </section>
+
+        <!-- Room Types List Section -->
+        <section class="dashboard__section">
+            <h2 class="section__subheader">Existing Room Types</h2>
+            <div class="table__container">
+                <?php if (empty($room_types)): ?>
+                    <p>No room types available.</p>
+                <?php else: ?>
+                    <table class="data__table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Description</th>
+                                <th>Base Price ($)</th>
+                                <th>Image Path</th>
+                                <th>Created At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($room_types as $room_type): ?>
+                                <tr>
+                                    <td><?php echo htmlspecialchars($room_type['id']); ?></td>
+                                    <td><?php echo htmlspecialchars($room_type['name']); ?></td>
+                                    <td><?php echo htmlspecialchars($room_type['description'] ?? 'No description'); ?></td>
+                                    <td><?php echo number_format($room_type['base_price'], 2); ?></td>
+                                    <td><?php echo htmlspecialchars($room_type['image_path'] ?? 'No image'); ?></td>
+                                    <td><?php echo htmlspecialchars($room_type['created_at']); ?></td>
+                                    <td>
+                                        <a href="create_room_type.php?edit_id=<?php echo $room_type['id']; ?>" class="btn btn--small btn--primary">Edit</a>
+                                        <form method="POST" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this room type?');">
+                                            <input type="hidden" name="room_type_id" value="<?php echo $room_type['id']; ?>">
+                                            <button type="submit" name="delete_room_type" class="btn btn--small btn--danger">Delete</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
             </div>
         </section>
     </main>
@@ -223,7 +344,7 @@ include 'templates/header.php';
     font-size: 1rem;
     font-weight: 600;
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 0.5rem;
     justify-content: center;
@@ -238,6 +359,31 @@ include 'templates/header.php';
 .btn--primary:hover {
     background: #2563eb;
     transform: translateY(-1px);
+}
+
+.btn--secondary {
+    background: #6b7280;
+    color: white;
+}
+
+.btn--secondary:hover {
+    background: #4b5563;
+    transform: translateY(-1px);
+}
+
+.btn--danger {
+    background: #dc2626;
+    color: white;
+}
+
+.btn--danger:hover {
+    background: #b91c1c;
+    transform: translateY(-1px);
+}
+
+.btn--small {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
 }
 
 .alert {
@@ -276,6 +422,41 @@ include 'templates/header.php';
 
 .dashboard__section {
     display: block;
+    margin-bottom: 2rem;
+}
+
+.table__container {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-top: 1.5rem;
+}
+
+.data__table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data__table th,
+.data__table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.data__table th {
+    background: #f9fafb;
+    font-weight: 600;
+    color: #374151;
+}
+
+.data__table td {
+    color: #374151;
+}
+
+.data__table tr:hover {
+    background: #f3f4f6;
 }
 </style>
 

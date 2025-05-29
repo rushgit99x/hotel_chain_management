@@ -2,6 +2,19 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
+
+// Include database connection
+require_once 'db_connect.php';
+
+// Fetch room types from the database
+try {
+    $stmt = $pdo->query("SELECT * FROM room_types");
+    $room_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $room_types = [];
+    $error = "Error fetching room types: " . $e->getMessage();
+}
+
 include 'templates/header.php';
 ?>
 
@@ -24,8 +37,7 @@ include 'templates/header.php';
                     <?php if ($_SESSION['role'] == 'super_admin'): ?>
                         <li><a href="admin_portal.php">Admin Portal</a></li>
                     <?php elseif ($_SESSION['role'] == 'manager'): ?>
-                        <!-- <li><a href="manager_portal.php">Manager Portal</a></li> -->
-                           <li><a href="manager/manager_dashboard.php">Manager Portal</a></li>
+                        <li><a href="manager/manager_dashboard.php">Manager Portal</a></li>
                     <?php else: ?>
                         <li><a href="customer_dashboard.php">Dashboard</a></li>
                     <?php endif; ?>
@@ -83,55 +95,35 @@ include 'templates/header.php';
 <section class="section__container room__container">
     <p class="section__subheader">OUR LIVING ROOM</p>
     <h2 class="section__header">The Most Memorable Rest Time Starts Here.</h2>
+    <?php if (isset($error)): ?>
+        <div class="alert alert--error">
+            <i class="ri-error-warning-line"></i>
+            <span><?php echo htmlspecialchars($error); ?></span>
+        </div>
+    <?php endif; ?>
     <div class="room__grid">
-        <div class="room__card">
-            <div class="room__card__image">
-                <img src="/hotel_chain_management/assets/images/room-1.jpg?v=<?php echo time(); ?>" alt="room" />
-                <div class="room__card__icons">
-                    <span><i class="ri-heart-fill"></i></span>
-                    <span><i class="ri-paint-fill"></i></span>
-                    <span><i class="ri-shield-star-line"></i></span>
+        <?php if (empty($room_types)): ?>
+            <p>No room types available at the moment.</p>
+        <?php else: ?>
+            <?php foreach ($room_types as $room_type): ?>
+                <div class="room__card">
+                    <div class="room__card__image">
+                        <img src="<?php echo htmlspecialchars($room_type['image_path'] ?? '/hotel_chain_management/assets/images/default-room.jpg?v=' . time()); ?>" alt="<?php echo htmlspecialchars($room_type['name']); ?>" />
+                        <!-- <div class="room__card__icons">
+                            <span><i class="ri-heart-fill"></i></span>
+                            <span><i class="ri-paint-fill"></i></span>
+                            <span><i class="ri-shield-star-line"></i></span>
+                        </div> --> <!-- Uncomment if you want to use icons -->
+                    </div>
+                    <div class="room__card__details">
+                        <h4><?php echo htmlspecialchars($room_type['name']); ?></h4>
+                        <p><?php echo htmlspecialchars($room_type['description'] ?? 'No description available.'); ?></p>
+                        <h5>Starting from <span>$<?php echo number_format($room_type['base_price'], 2); ?>/night</span></h5>
+                        <a href="book_room.php?room_type_id=<?php echo $room_type['id']; ?>" class="btn">Book Now</a>
+                    </div>
                 </div>
-            </div>
-            <div class="room__card__details">
-                <h4>Deluxe Ocean View</h4>
-                <p>Bask in luxury with breathtaking ocean views from your private suite.</p>
-                <h5>Starting from <span>$299/night</span></h5>
-                <a href="#" class="btn">Book Now</a>
-            </div>
-        </div>
-        <div class="room__card">
-            <div class="room__card__image">
-                <img src="/hotel_chain_management/assets/images/room-2.jpg?v=<?php echo time(); ?>" alt="room" />
-                <div class="room__card__icons">
-                    <span><i class="ri-heart-fill"></i></span>
-                    <span><i class="ri-paint-fill"></i></span>
-                    <span><i class="ri-shield-star-line"></i></span>
-                </div>
-            </div>
-            <div class="room__card__details">
-                <h4>Executive Cityscape Room</h4>
-                <p>Experience urban elegance and modern comfort in the heart of the city.</p>
-                <h5>Starting from <span>$199/night</span></h5>
-                <a href="#" class="btn">Book Now</a>
-            </div>
-        </div>
-        <div class="room__card">
-            <div class="room__card__image">
-                <img src="/hotel_chain_management/assets/images/room-3.jpg?v=<?php echo time(); ?>" alt="room" />
-                <div class="room__card__icons">
-                    <span><i class="ri-heart-fill"></i></span>
-                    <span><i class="ri-paint-fill"></i></span>
-                    <span><i class="ri-shield-star-line"></i></span>
-                </div>
-            </div>
-            <div class="room__card__details">
-                <h4>Family Garden Retreat</h4>
-                <p>Spacious and inviting, perfect for creating cherished memories with loved ones.</p>
-                <h5>Starting from <span>$249/night</span></h5>
-                <a href="#" class="btn">Book Now</a>
-            </div>
-        </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
     </div>
 </section>
 

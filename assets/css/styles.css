@@ -471,6 +471,7 @@ nav {
 .footer__container {
   display: grid;
   gap: 4rem 2rem;
+  /* background-color: var(--text-dark); */
 }
 
 .footer__col .section__description {

@@ -31,12 +31,27 @@ function processLogin($pdo) {
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['role'] = $user['role'];
                 error_log("Login successful for user: " . $email . ", role: " . $user['role']);
-                if ($user['role'] == 'super_admin') {
-                    header("Location: admin_dashboard.php");
-                } elseif ($user['role'] == 'manager') {
-                    header("Location: manager_dashboard.php");
-                } else {
-                    header("Location: clerk_dashboard.php");
+                
+                // Redirect based on role
+                switch ($user['role']) {
+                    case 'super_admin':
+                        header("Location: admin_dashboard.php");
+                        break;
+                    case 'manager':
+                        header("Location: manager_dashboard.php");
+                        break;
+                    case 'customer':
+                        header("Location: customer_dashboard.php");
+                        break;
+                    case 'travel_company':
+                        header("Location: travel_company_dashboard.php");
+                        break;
+                    case 'clerk':
+                        header("Location: clerk_dashboard.php");
+                        break;
+                    default:
+                        error_log("Unknown role: " . $user['role']);
+                        return "Invalid user role.";
                 }
                 exit;
             } else {
