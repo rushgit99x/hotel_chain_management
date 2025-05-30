@@ -132,12 +132,12 @@ include 'templates/header.php';
                         <span>Manage Reservations</span>
                     </a>
                 </li>
-                <li>
+                <!-- <li>
                     <a href="group_bookings.php" class="sidebar__link">
                         <i class="ri-group-line"></i>
                         <span>Group Bookings</span>
                     </a>
-                </li>
+                </li> -->
                 <li>
                     <a href="residential_suites.php" class="sidebar__link">
                         <i class="ri-home-heart-line"></i>

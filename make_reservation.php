@@ -18,13 +18,6 @@ $user_id = $_SESSION['user_id'];
 $errors = [];
 $success = '';
 
-// Define room occupancy limits
-$room_occupancy_limits = [
-    'single' => 2,
-    'double' => 4,
-    'suite' => 6
-];
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Sanitize and validate input
     $branch_id = filter_input(INPUT_POST, 'branch_id', FILTER_VALIDATE_INT);
@@ -32,6 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $check_in_date = filter_input(INPUT_POST, 'check_in_date', FILTER_DEFAULT);
     $check_out_date = filter_input(INPUT_POST, 'check_out_date', FILTER_DEFAULT);
     $occupants = filter_input(INPUT_POST, 'occupants', FILTER_VALIDATE_INT);
+    $number_of_rooms = filter_input(INPUT_POST, 'number_of_rooms', FILTER_VALIDATE_INT);
     $payment_method = filter_input(INPUT_POST, 'payment_method', FILTER_SANITIZE_SPECIAL_CHARS);
     $card_number = filter_input(INPUT_POST, 'card_number', FILTER_SANITIZE_SPECIAL_CHARS);
     $card_expiry = filter_input(INPUT_POST, 'card_expiry', FILTER_SANITIZE_SPECIAL_CHARS);
@@ -58,15 +52,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = "Check-in date cannot be in the past.";
     }
 
-    // Enhanced occupancy validation based on room type
+    // Occupants validation (simple positive integer)
     if (!$occupants || $occupants < 1) {
         $errors[] = "Please provide a valid number of occupants (minimum 1).";
-    } elseif ($room_type && isset($room_occupancy_limits[$room_type])) {
-        $max_occupants = $room_occupancy_limits[$room_type];
-        if ($occupants > $max_occupants) {
-            $room_type_display = ucfirst($room_type);
-            $errors[] = "Maximum occupancy for {$room_type_display} room is {$max_occupants} guests.";
-        }
+    }
+
+    // Number of rooms validation
+    if (!$number_of_rooms || $number_of_rooms < 1) {
+        $errors[] = "Please provide a valid number of rooms (minimum 1).";
+    } elseif ($number_of_rooms > 10) {
+        $errors[] = "Cannot reserve more than 10 rooms at once.";
     }
 
     // Payment method validation
@@ -133,41 +128,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // Check room availability
+    // Check room type availability at the branch
     if (empty($errors)) {
         try {
             $stmt = $pdo->prepare("
-                SELECT r.id
-                FROM rooms r
-                JOIN room_types rt ON r.room_type_id = rt.id
-                WHERE r.branch_id = ? 
-                AND rt.name = ? 
-                AND r.status = 'available'
-                AND r.id NOT IN (
-                    SELECT room_id 
-                    FROM bookings 
-                    WHERE branch_id = ? 
-                    AND status IN ('pending', 'confirmed')
-                    AND (
-                        (check_in <= ? AND check_out >= ?) 
-                        OR (check_in >= ? AND check_in <= ?)
-                    )
-                )
-                LIMIT 1
+                SELECT rt.id
+                FROM room_types rt
+                JOIN rooms r ON r.room_type_id = rt.id
+                WHERE r.branch_id = :branch_id AND rt.name = :room_type AND r.status = 'available'
+                LIMIT :limit
             ");
-            $stmt->execute([
-                $branch_id,
-                ucfirst($room_type),
-                $branch_id,
-                $check_out_date,
-                $check_in_date,
-                $check_in_date,
-                $check_out_date
-            ]);
-            $available_room = $stmt->fetch(PDO::FETCH_ASSOC);
+            $stmt->bindValue(':branch_id', $branch_id, PDO::PARAM_INT);
+            $stmt->bindValue(':room_type', ucfirst($room_type), PDO::PARAM_STR);
+            $stmt->bindValue(':limit', (int)$number_of_rooms, PDO::PARAM_INT);
+            $stmt->execute();
+            $available_rooms = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            if (!$available_room) {
-                $errors[] = "No rooms available for the selected dates and type.";
+            if (count($available_rooms) < $number_of_rooms) {
+                $errors[] = "Not enough rooms available for the selected type and quantity.";
             }
         } catch (PDOException $e) {
             $errors[] = "Database error: " . $e->getMessage();
@@ -179,21 +157,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $pdo->beginTransaction();
 
-            // Insert reservation
-            $stmt = $pdo->prepare("
-                INSERT INTO reservations (user_id, hotel_id, room_type, check_in_date, check_out_date, occupants, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
-            ");
-            $stmt->execute([$user_id, $branch_id, htmlspecialchars($room_type), htmlspecialchars($check_in_date), htmlspecialchars($check_out_date), $occupants]);
-            $reservation_id = $pdo->lastInsertId();
-
-            // Insert booking
-            $stmt = $pdo->prepare("
-                INSERT INTO bookings (user_id, room_id, branch_id, check_in, check_out, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', NOW())
-            ");
-            $stmt->execute([$user_id, $available_room['id'], $branch_id, htmlspecialchars($check_in_date), htmlspecialchars($check_out_date)]);
-
             // Calculate amount for payment
             $stmt = $pdo->prepare("
                 SELECT base_price 
@@ -202,26 +165,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ");
             $stmt->execute([ucfirst($room_type)]);
             $base_price = $stmt->fetch(PDO::FETCH_ASSOC)['base_price'] ?? 100.00;
-            
             $days = (strtotime($check_out_date) - strtotime($check_in_date)) / (60 * 60 * 24);
-            $amount = $base_price * $days;
+            $amount = $base_price * $days * $number_of_rooms;
 
-            // Insert payment based on payment method
+            // Insert reservation with pending status and appropriate payment_status
+            $payment_status = $payment_method === 'credit_card' ? 'paid' : 'unpaid';
+            $stmt = $pdo->prepare("
+                INSERT INTO reservations (user_id, hotel_id, room_type, check_in_date, check_out_date, occupants, number_of_rooms, status, payment_status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW())
+            ");
+            $stmt->execute([$user_id, $branch_id, htmlspecialchars($room_type), htmlspecialchars($check_in_date), htmlspecialchars($check_out_date), $occupants, $number_of_rooms, $payment_status]);
+            $reservation_id = $pdo->lastInsertId();
+
+            // Insert payment for credit card payments
             if ($payment_method === 'credit_card') {
-                // Insert into payments table
                 $card_last_four = substr($clean_card_number ?? '', -4);
                 $stmt = $pdo->prepare("
                     INSERT INTO payments (user_id, reservation_id, amount, payment_method, card_last_four, cardholder_name, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
+                    VALUES (?, ?, ?, ?, ?, ?, 'completed', NOW())
                 ");
                 $stmt->execute([$user_id, $reservation_id, $amount, htmlspecialchars($payment_method), $card_last_four, htmlspecialchars($cardholder_name ?? '')]);
-            } else {
-                // Insert into pending_payments table
-                $stmt = $pdo->prepare("
-                    INSERT INTO pending_payments (user_id, reservation_id, amount, payment_method, status, created_at)
-                    VALUES (?, ?, ?, 'invoice', 'pending', NOW())
-                ");
-                $stmt->execute([$user_id, $reservation_id, $amount]);
             }
 
             $pdo->commit();
@@ -337,15 +300,9 @@ include 'templates/header.php';
                     </a>
                 </li>
                 <li>
-                    <a href="customer_manage_reservations.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'manage_reservations.php' ? 'active' : ''; ?>">
+                    <a href="customer_manage_reservations.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_manage_reservations.php' ? 'active' : ''; ?>">
                         <i class="ri-calendar-line"></i>
                         <span>Manage Reservations</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="group_bookings.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'group_bookings.php' ? 'active' : ''; ?>">
-                        <i class="ri-group-line"></i>
-                        <span>Group Bookings</span>
                     </a>
                 </li>
                 <li>
@@ -427,7 +384,7 @@ include 'templates/header.php';
 
                 <div class="form__group">
                     <label for="room_type">Room Type</label>
-                    <select id="room_type" name="room_type" required onchange="updateOccupancyLimit()">
+                    <select id="room_type" name="room_type" required>
                         <option value="">Select room type</option>
                         <?php foreach ($room_types as $type): ?>
                             <option value="<?php echo strtolower($type['name']); ?>" <?php echo isset($room_type) && $room_type == strtolower($type['name']) ? 'selected' : ''; ?>>
@@ -435,7 +392,6 @@ include 'templates/header.php';
                             </option>
                         <?php endforeach; ?>
                     </select>
-                    <small class="form__help">Room occupancy limits: Single (2), Double (4), Suite (6)</small>
                 </div>
 
                 <div class="form__group">
@@ -450,8 +406,14 @@ include 'templates/header.php';
 
                 <div class="form__group">
                     <label for="occupants">Number of Occupants</label>
-                    <input type="number" id="occupants" name="occupants" min="1" max="6" value="<?php echo isset($occupants) ? htmlspecialchars($occupants) : 1; ?>" required>
-                    <small class="form__help" id="occupancy-help">Maximum occupancy depends on room type</small>
+                    <input type="number" id="occupants" name="occupants" min="1" value="<?php echo isset($occupants) ? htmlspecialchars($occupants) : 1; ?>" required>
+                    <small class="form__help">Total number of occupants for all rooms</small>
+                </div>
+
+                <div class="form__group">
+                    <label for="number_of_rooms">Number of Rooms</label>
+                    <input type="number" id="number_of_rooms" name="number_of_rooms" min="1" max="10" value="<?php echo isset($number_of_rooms) ? htmlspecialchars($number_of_rooms) : 1; ?>" required>
+                    <small class="form__help">How many rooms would you like to reserve?</small>
                 </div>
 
                 <div class="form__group">
@@ -729,11 +691,6 @@ include 'templates/header.php';
 document.addEventListener('DOMContentLoaded', function() {
     const sidebarToggle = document.getElementById('sidebar-toggle');
     const sidebar = document.getElementById('sidebar');
-    const roomOccupancyLimits = {
-        'single': 2,
-        'double': 4,
-        'suite': 6
-    };
 
     // Toggle sidebar
     sidebarToggle?.addEventListener('click', function() {
@@ -741,26 +698,6 @@ document.addEventListener('DOMContentLoaded', function() {
         sidebarToggle.querySelector('i').classList.toggle('ri-menu-fold-line');
         sidebarToggle.querySelector('i').classList.toggle('ri-menu-unfold-line');
     });
-
-    // Update occupancy limit based on room type
-    window.updateOccupancyLimit = function() {
-        const roomType = document.getElementById('room_type').value;
-        const occupantsInput = document.getElementById('occupants');
-        const occupancyHelp = document.getElementById('occupancy-help');
-        
-        if (roomType && roomOccupancyLimits[roomType]) {
-            const maxOccupants = roomOccupancyLimits[roomType];
-            occupantsInput.setAttribute('max', maxOccupants);
-            occupancyHelp.textContent = `Maximum occupancy for ${roomType} room: ${maxOccupants} guests`;
-            
-            if (parseInt(occupantsInput.value) > maxOccupants) {
-                occupantsInput.value = maxOccupants;
-            }
-        } else {
-            occupantsInput.setAttribute('max', '6');
-            occupancyHelp.textContent = 'Maximum occupancy depends on room type';
-        }
-    };
 
     // Toggle payment fields and warning message
     window.togglePaymentFields = function() {
@@ -793,6 +730,7 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('check_in_date').value = '';
             document.getElementById('check_out_date').value = '';
             document.getElementById('occupants').value = '1';
+            document.getElementById('number_of_rooms').value = '1';
             document.getElementById('payment_method').value = 'credit_card';
             
             // Clear credit card fields
@@ -809,11 +747,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const tomorrow = new Date();
             tomorrow.setDate(tomorrow.getDate() + 1);
             document.getElementById('check_out_date').setAttribute('min', tomorrow.toISOString().split('T')[0]);
-            
-            // Reset occupancy limit display
-            const occupancyHelp = document.getElementById('occupancy-help');
-            occupancyHelp.textContent = 'Maximum occupancy depends on room type';
-            document.getElementById('occupants').setAttribute('max', '6');
             
             // Show credit card fields by default and hide payment warning
             document.getElementById('credit_card_fields').style.display = 'block';
@@ -938,12 +871,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 errors.push('Check-out date must be after check-in date');
             }
             
-            // Check occupancy limits
-            const roomType = document.getElementById('room_type').value;
+            // Check occupants
             const occupants = parseInt(document.getElementById('occupants').value);
+            if (!occupants || occupants < 1) {
+                errors.push('Please provide a valid number of occupants');
+            }
             
-            if (roomType && roomOccupancyLimits[roomType] && occupants > roomOccupancyLimits[roomType]) {
-                errors.push(`Maximum occupancy for ${roomType} room is ${roomOccupancyLimits[roomType]} guests`);
+            // Check number of rooms
+            const numberOfRooms = parseInt(document.getElementById('number_of_rooms').value);
+            if (!numberOfRooms || numberOfRooms < 1) {
+                errors.push('Please provide a valid number of rooms');
+            } else if (numberOfRooms > 10) {
+                errors.push('Cannot reserve more than 10 rooms at once');
             }
             
             // Credit card validation only if payment method is credit_card
@@ -988,7 +927,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Initialize states
-    updateOccupancyLimit();
     togglePaymentFields();
 });
 </script>
