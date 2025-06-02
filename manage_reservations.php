@@ -13,199 +13,147 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'clerk') {
 require_once 'db_connect.php';
 include_once 'includes/functions.php';
 
-// Get clerk's branch_id and branch name
+// Get clerk's branch_id
 $user_id = $_SESSION['user_id'];
-$stmt = $pdo->prepare("SELECT u.branch_id, b.name AS branch_name 
-                      FROM users u 
-                      LEFT JOIN branches b ON u.branch_id = b.id 
-                      WHERE u.id = ? AND u.role = 'clerk'");
+$stmt = $pdo->prepare("SELECT branch_id FROM users WHERE id = ? AND role = 'clerk'");
 $stmt->execute([$user_id]);
-$result = $stmt->fetch(PDO::FETCH_ASSOC);
-$branch_id = $result['branch_id'] ?? 0;
-$branch_name = $result['branch_name'] ?? 'Unknown Branch';
+$branch_id = $stmt->fetch(PDO::FETCH_ASSOC)['branch_id'] ?? 0;
 
 if (!$branch_id) {
     $db_error = "No branch assigned to this clerk.";
 }
 
-// Initialize variables
-$errors = [];
-$success = '';
-$booking = null;
-$available_rooms = [];
+// Define reservation fee (configurable)
+define('RESERVATION_FEE', 10.00);
 
-// Fetch available rooms for walk-in processing
+// Handle reservation actions (approve/cancel)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_POST['reservation_id'])) {
+    $reservation_id = (int)$_POST['reservation_id'];
+    $action = $_POST['action'];
+
+    try {
+        // Fetch reservation details with room type price
+        $stmt = $pdo->prepare("SELECT r.*, rt.id as room_type_id, rt.base_price, rt.name as room_type_name 
+                              FROM reservations r 
+                              JOIN room_types rt ON r.room_type = rt.name 
+                              WHERE r.id = ? AND r.status = 'pending'");
+        $stmt->execute([$reservation_id]);
+        $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($reservation) {
+            if ($action === 'approve') {
+                // Find an available room of the requested type in the clerk's branch
+                $stmt = $pdo->prepare("SELECT id FROM rooms WHERE branch_id = ? AND room_type_id = ? AND status = 'available' LIMIT 1");
+                $stmt->execute([$branch_id, $reservation['room_type_id']]);
+                $room = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($room) {
+                    // Calculate room cost: base_price * number_of_rooms * stay duration (in days)
+                    $check_in = new DateTime($reservation['check_in_date']);
+                    $check_out = new DateTime($reservation['check_out_date']);
+                    $stay_duration = $check_in->diff($check_out)->days;
+                    $room_cost = $reservation['base_price'] * $reservation['number_of_rooms'] * $stay_duration;
+
+                    // Apply discount if any
+                    $discount = $reservation['discount_percentage'] / 100;
+                    $room_cost = $room_cost * (1 - $discount);
+
+                    // Calculate total amount including reservation fee
+                    $total_amount = $room_cost + RESERVATION_FEE;
+
+                    // Start transaction
+                    $pdo->beginTransaction();
+
+                    // Insert into bookings table
+                    $stmt = $pdo->prepare("INSERT INTO bookings (user_id, room_id, branch_id, check_in, check_out, status, created_at) 
+                                          VALUES (?, ?, ?, ?, ?, 'confirmed', NOW())");
+                    $stmt->execute([
+                        $reservation['user_id'],
+                        $room['id'],
+                        $branch_id,
+                        $reservation['check_in_date'],
+                        $reservation['check_out_date']
+                    ]);
+
+                    // Update room status to occupied
+                    $stmt = $pdo->prepare("UPDATE rooms SET status = 'occupied' WHERE id = ?");
+                    $stmt->execute([$room['id']]);
+
+                    // Insert into billings table with remaining_balance and placeholder for no additional services
+                    $stmt = $pdo->prepare("INSERT INTO billings (reservation_id, user_id, service_type, additional_fee, remaining_balance, status, created_at) 
+                                          VALUES (?, ?, 'none', 0.00, ?, 'pending', NOW())");
+                    $stmt->execute([
+                        $reservation['id'],
+                        $reservation['user_id'],
+                        $total_amount
+                    ]);
+
+                    // Check if the user is a travel company
+                    $stmt = $pdo->prepare("SELECT role, id FROM users WHERE id = ?");
+                    $stmt->execute([$reservation['user_id']]);
+                    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if ($user['role'] === 'travel_company') {
+                        // Fetch company profile to get company_id
+                        $stmt = $pdo->prepare("SELECT id FROM company_profiles WHERE user_id = ?");
+                        $stmt->execute([$reservation['user_id']]);
+                        $company = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                        if ($company) {
+                            // Calculate due date (30 days from now)
+                            $due_date = (new DateTime())->modify('+30 days')->format('Y-m-d');
+
+                            // Insert into invoices table
+                            $stmt = $pdo->prepare("INSERT INTO invoices (company_id, amount, status, issued_at, due_date) 
+                                                  VALUES (?, ?, 'pending', NOW(), ?)");
+                            $stmt->execute([
+                                $company['id'],
+                                $total_amount,
+                                $due_date
+                            ]);
+                        } else {
+                            error_log("No company profile found for travel company user ID: " . $reservation['user_id']);
+                        }
+                    }
+
+                    // Update reservation status and remaining_balance
+                    $stmt = $pdo->prepare("UPDATE reservations SET status = 'confirmed', remaining_balance = ? WHERE id = ?");
+                    $stmt->execute([$total_amount, $reservation_id]);
+
+                    // Commit transaction
+                    $pdo->commit();
+                    $success_message = "Reservation approved, moved to bookings, billing record created" . ($user['role'] === 'travel_company' ? ", and invoice generated." : ".");
+                } else {
+                    $error_message = "No available rooms of the requested type.";
+                }
+            } elseif ($action === 'cancel') {
+                // Update reservation status to cancelled
+                $stmt = $pdo->prepare("UPDATE reservations SET status = 'cancelled' WHERE id = ?");
+                $stmt->execute([$reservation_id]);
+                $success_message = "Reservation cancelled successfully.";
+            }
+        } else {
+            $error_message = "Invalid or non-pending reservation.";
+        }
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        $error_message = "Database error: " . $e->getMessage();
+    }
+}
+
+// Fetch all pending reservations for the clerk's branch
 try {
-    $stmt = $pdo->prepare("
-        SELECT r.id, r.room_number, rt.name AS room_type
-        FROM rooms r
-        JOIN room_types rt ON r.room_type_id = rt.id
-        WHERE r.branch_id = ? AND r.status = 'available'
-    ");
+    $stmt = $pdo->prepare("SELECT r.*, u.name AS user_name, rt.name AS room_type_name 
+                          FROM reservations r 
+                          JOIN users u ON r.user_id = u.id 
+                          JOIN room_types rt ON r.room_type = rt.name 
+                          JOIN branches b ON r.hotel_id = b.id 
+                          WHERE b.id = ? AND r.status = 'pending'");
     $stmt->execute([$branch_id]);
-    $available_rooms = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    $errors[] = "Error fetching available rooms: " . $e->getMessage();
-}
-
-// Handle booking search
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['search_booking'])) {
-    $search_type = $_POST['search_type'] ?? '';
-    $search_value = trim($_POST['search_value'] ?? '');
-
-    if (empty($search_value)) {
-        $errors[] = "Please enter a valid email or booking ID.";
-    } else {
-        try {
-            if ($search_type === 'email') {
-                $stmt = $pdo->prepare("
-                    SELECT b.id, b.user_id, b.room_id, b.check_in, b.check_out, b.status, u.email, u.name, r.room_number, rt.name AS room_type
-                    FROM bookings b
-                    JOIN users u ON b.user_id = u.id
-                    JOIN rooms r ON b.room_id = r.id
-                    JOIN room_types rt ON r.room_type_id = rt.id
-                    WHERE u.email = ? AND b.branch_id = ? AND b.status = 'confirmed'
-                ");
-                $stmt->execute([$search_value, $branch_id]);
-            } else {
-                $stmt = $pdo->prepare("
-                    SELECT b.id, b.user_id, b.room_id, b.check_in, b.check_out, b.status, u.email, u.name, r.room_number, rt.name AS room_type
-                    FROM bookings b
-                    JOIN users u ON b.user_id = u.id
-                    JOIN rooms r ON b.room_id = r.id
-                    JOIN room_types rt ON r.room_type_id = rt.id
-                    WHERE b.id = ? AND b.branch_id = ? AND b.status = 'confirmed'
-                ");
-                $stmt->execute([(int)$search_value, $branch_id]);
-            }
-            $booking = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$booking) {
-                $errors[] = "No active booking found.";
-            }
-        } catch (PDOException $e) {
-            $errors[] = "Error searching booking: " . $e->getMessage();
-        }
-    }
-}
-
-// Handle check-out date modification
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['modify_checkout'])) {
-    $booking_id = (int)($_POST['booking_id'] ?? 0);
-    $new_check_out = $_POST['new_check_out'] ?? '';
-
-    if ($booking_id <= 0 || empty($new_check_out)) {
-        $errors[] = "Invalid booking ID or check-out date.";
-    } elseif (strtotime($new_check_out) <= strtotime(date('Y-m-d'))) {
-        $errors[] = "New check-out date must be in the future.";
-    } else {
-        try {
-            // Verify booking exists and is confirmed
-            $stmt = $pdo->prepare("SELECT check_in FROM bookings WHERE id = ? AND branch_id = ? AND status = 'confirmed'");
-            $stmt->execute([$booking_id, $branch_id]);
-            $booking_check = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$booking_check) {
-                $errors[] = "Invalid or non-confirmed booking.";
-            } elseif (strtotime($new_check_out) <= strtotime($booking_check['check_in'])) {
-                $errors[] = "Check-out date must be after check-in date.";
-            } else {
-                // Update check-out date
-                $stmt = $pdo->prepare("UPDATE bookings SET check_out = ? WHERE id = ?");
-                $stmt->execute([$new_check_out, $booking_id]);
-                $success = "Check-out date updated successfully.";
-                $booking = null; // Clear booking to reset form
-            }
-        } catch (PDOException $e) {
-            $errors[] = "Error updating check-out date: " . $e->getMessage();
-        }
-    }
-}
-
-// Handle customer information update
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_customer'])) {
-    $user_id = (int)($_POST['user_id'] ?? 0);
-    $name = trim($_POST['name'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-
-    if ($user_id <= 0 || empty($name) || empty($email)) {
-        $errors[] = "All fields are required for customer update.";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $errors[] = "Invalid email format.";
-    } else {
-        try {
-            // Check if new email is already in use (excluding current user)
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $stmt->execute([$email, $user_id]);
-            if ($stmt->fetch(PDO::FETCH_ASSOC)) {
-                $errors[] = "Email is already in use by another user.";
-            } else {
-                // Update customer information
-                $stmt = $pdo->prepare("UPDATE users SET name = ?, email = ? WHERE id = ? AND role = 'customer'");
-                $stmt->execute([$name, $email, $user_id]);
-                $success = "Customer information updated successfully.";
-                $booking = null; // Clear booking to reset form
-            }
-        } catch (PDOException $e) {
-            $errors[] = "Error updating customer information: " . $e->getMessage();
-        }
-    }
-}
-
-// Handle walk-in customer booking
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_walkin'])) {
-    $name = trim($_POST['name'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $check_in = $_POST['check_in'] ?? '';
-    $check_out = $_POST['check_out'] ?? '';
-    $room_id = (int)($_POST['room_id'] ?? 0);
-
-    if (empty($name) || empty($email) || empty($check_in) || empty($check_out) || $room_id <= 0) {
-        $errors[] = "All fields are required for walk-in booking.";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $errors[] = "Invalid email format.";
-    } elseif (strtotime($check_in) < strtotime(date('Y-m-d')) || strtotime($check_out) <= strtotime($check_in)) {
-        $errors[] = "Invalid check-in or check-out date.";
-    } else {
-        try {
-            // Check if email exists, if not create new customer
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
-            $stmt->execute([$email]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$user) {
-                $password = password_hash('default123', PASSWORD_BCRYPT); // Temporary password
-                $stmt = $pdo->prepare("INSERT INTO users (email, password, role, name, created_at) VALUES (?, ?, 'customer', ?, NOW())");
-                $stmt->execute([$email, $password, $name]);
-                $user_id = $pdo->lastInsertId();
-            } else {
-                $user_id = $user['id'];
-            }
-
-            // Verify room is available
-            $stmt = $pdo->prepare("SELECT id, status FROM rooms WHERE id = ? AND branch_id = ? AND status = 'available'");
-            $stmt->execute([$room_id, $branch_id]);
-            $room = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$room) {
-                $errors[] = "Selected room is not available.";
-            } else {
-                // Create new booking
-                $stmt = $pdo->prepare("
-                    INSERT INTO bookings (user_id, room_id, branch_id, check_in, check_out, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'confirmed', NOW())
-                ");
-                $stmt->execute([$user_id, $room_id, $branch_id, $check_in, $check_out]);
-
-                // Update room status to occupied
-                $stmt = $pdo->prepare("UPDATE rooms SET status = 'occupied' WHERE id = ?");
-                $stmt->execute([$room_id]);
-
-                $success = "Walk-in booking created successfully. Room assigned and key issued.";
-            }
-        } catch (PDOException $e) {
-            $errors[] = "Error creating walk-in booking: " . $e->getMessage();
-        }
-    }
+    $db_error = "Database error: " . $e->getMessage();
+    $reservations = [];
 }
 
 include 'templates/header.php';
@@ -229,21 +177,15 @@ include 'templates/header.php';
                     </a>
                 </li>
                 <li>
-                    <a href="check_in.php" class="sidebar__link">
-                        <i class="ri-login-box-line"></i>
-                        <span>Check-In Customers</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="check_out.php" class="sidebar__link">
-                        <i class="ri-logout-box-line"></i>
-                        <span>Check-Out Customers</span>
-                    </a>
-                </li>
-                <li>
                     <a href="manage_reservations.php" class="sidebar__link active">
                         <i class="ri-calendar-check-line"></i>
                         <span>Manage Reservations</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="manage_check_in_out.php" class="sidebar__link">
+                        <i class="ri-logout-box-line"></i>
+                        <span>Check-In/Out Customers</span>
                     </a>
                 </li>
                 <li>
@@ -265,12 +207,6 @@ include 'templates/header.php';
                     </a>
                 </li>
                 <li>
-                    <a href="process_payments.php" class="sidebar__link">
-                        <i class="ri-money-dollar-circle-line"></i>
-                        <span>Process Payments</span>
-                    </a>
-                </li>
-                <li>
                     <a href="clerk_settings.php" class="sidebar__link">
                         <i class="ri-settings-3-line"></i>
                         <span>Profile</span>
@@ -288,206 +224,138 @@ include 'templates/header.php';
 
     <main class="dashboard__content">
         <header class="dashboard__header">
-            <h1 class="section__header"><?php echo htmlspecialchars($branch_name); ?> - Manage Reservations</h1>
+            <h1 class="section__header">Manage Reservations</h1>
             <div class="user__info">
                 <span>Welcome, <?php echo htmlspecialchars($_SESSION['username'] ?? 'Clerk'); ?></span>
                 <img src="/hotel_chain_management/assets/images/avatar.png?v=<?php echo time(); ?>" alt="avatar" class="user__avatar" />
             </div>
         </header>
 
-        <section id="manage-reservations" class="dashboard__section active">
-            <h2 class="section__subheader">Manage Reservations</h2>
-
-            <?php if (!empty($errors)): ?>
-                <div class="error">
-                    <?php foreach ($errors as $error): ?>
-                        <p><?php echo htmlspecialchars($error); ?></p>
-                    <?php endforeach; ?>
-                </div>
+        <section id="reservations" class="dashboard__section active">
+            <h2 class="section__subheader">Pending Reservations</h2>
+            <?php if (isset($db_error)): ?>
+                <p class="error"><?php echo htmlspecialchars($db_error); ?></p>
             <?php endif; ?>
-            <?php if ($success): ?>
-                <div class="success">
-                    <p><?php echo htmlspecialchars($success); ?></p>
-                </div>
+            <?php if (isset($success_message)): ?>
+                <p class="success"><?php echo htmlspecialchars($success_message); ?></p>
             <?php endif; ?>
-
-            <!-- Search Booking -->
-            <div class="form__container">
-                <h3>Search Active Booking</h3>
-                <form method="POST" action="manage_reservations.php">
-                    <div class="form__group">
-                        <label for="search_type">Search By:</label>
-                        <select name="search_type" id="search_type">
-                            <option value="email">Customer Email</option>
-                            <option value="booking_id">Booking ID</option>
-                        </select>
-                    </div>
-                    <div class="form__group">
-                        <label for="search_value">Enter Email or ID:</label>
-                        <input type="text" name="search_value" id="search_value" required>
-                    </div>
-                    <button type="submit" name="search_booking" class="btn btn-primary">Search</button>
-                </form>
-            </div>
-
-            <!-- Modify Check-Out Date or Customer Info -->
-            <?php if ($booking): ?>
-                <div class="form__container">
-                    <h3>Booking Details</h3>
-                    <p><strong>Name:</strong> <?php echo htmlspecialchars($booking['name']); ?></p>
-                    <p><strong>Email:</strong> <?php echo htmlspecialchars($booking['email']); ?></p>
-                    <p><strong>Room:</strong> <?php echo htmlspecialchars($booking['room_number'] . ' (' . $booking['room_type'] . ')'); ?></p>
-                    <p><strong>Check-In:</strong> <?php echo htmlspecialchars($booking['check_in']); ?></p>
-                    <p><strong>Check-Out:</strong> <?php echo htmlspecialchars($booking['check_out']); ?></p>
-
-                    <!-- Modify Check-Out Date -->
-                    <h4>Modify Check-Out Date</h4>
-                    <form method="POST" action="manage_reservations.php">
-                        <input type="hidden" name="booking_id" value="<?php echo $booking['id']; ?>">
-                        <div class="form__group">
-                            <label for="new_check_out">New Check-Out Date:</label>
-                            <input type="date" name="new_check_out" id="new_check_out" required>
-                        </div>
-                        <button type="submit" name="modify_checkout" class="btn btn-primary">Update Check-Out</button>
-                    </form>
-
-                    <!-- Update Customer Information -->
-                    <h4>Update Customer Information</h4>
-                    <form method="POST" action="manage_reservations.php">
-                        <input type="hidden" name="user_id" value="<?php echo $booking['user_id']; ?>">
-                        <div class="form__group">
-                            <label for="name">Name:</label>
-                            <input type="text" name="name" id="name" value="<?php echo htmlspecialchars($booking['name']); ?>" required>
-                        </div>
-                        <div class="form__group">
-                            <label for="email">Email:</label>
-                            <input type="email" name="email" id="email" value="<?php echo htmlspecialchars($booking['email']); ?>" required>
-                        </div>
-                        <button type="submit" name="update_customer" class="btn btn-primary">Update Customer</button>
-                    </form>
-                </div>
+            <?php if (isset($error_message)): ?>
+                <p class="error"><?php echo htmlspecialchars($error_message); ?></p>
             <?php endif; ?>
-
-            <!-- Create Walk-In Booking -->
-            <div class="form__container">
-                <h3>Create Walk-In Booking</h3>
-                <form method="POST" action="manage_reservations.php">
-                    <div class="form__group">
-                        <label for="name_walkin">Customer Name:</label>
-                        <input type="text" name="name" id="name_walkin" required>
-                    </div>
-                    <div class="form__group">
-                        <label for="email_walkin">Customer Email:</label>
-                        <input type="email" name="email" id="email_walkin" required>
-                    </div>
-                    <div class="form__group">
-                        <label for="check_in">Check-In Date:</label>
-                        <input type="date" name="check_in" id="check_in" required>
-                    </div>
-                    <div class="form__group">
-                        <label for="check_out">Check-Out Date:</label>
-                        <input type="date" name="check_out" id="check_out" required>
-                    </div>
-                    <div class="form__group">
-                        <label for="room_id">Assign Room:</label>
-                        <select name="room_id" id="room_id" required>
-                            <option value="">Select Room</option>
-                            <?php foreach ($available_rooms as $room): ?>
-                                <option value="<?php echo $room['id']; ?>">
-                                    <?php echo htmlspecialchars($room['room_number'] . ' (' . $room['room_type'] . ')'); ?>
-                                </option>
+            <?php if (empty($reservations)): ?>
+                <p>No pending reservations found.</p>
+            <?php else: ?>
+                <div class="reservations__table">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Customer</th>
+                                <th>Room Type</th>
+                                <th>Check-In</th>
+                                <th>Check-Out</th>
+                                <th>Occupants</th>
+                                <th>Rooms</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($reservations as $reservation): ?>
+                                <tr>
+                                    <td><?php echo htmlspecialchars($reservation['id']); ?></td>
+                                    <td><?php echo htmlspecialchars($reservation['user_name']); ?></td>
+                                    <td><?php echo htmlspecialchars($reservation['room_type_name']); ?></td>
+                                    <td><?php echo htmlspecialchars($reservation['check_in_date']); ?></td>
+                                    <td><?php echo htmlspecialchars($reservation['check_out_date']); ?></td>
+                                    <td><?php echo htmlspecialchars($reservation['occupants']); ?></td>
+                                    <td><?php echo htmlspecialchars($reservation['number_of_rooms']); ?></td>
+                                    <td>
+                                        <form method="POST" style="display: inline;">
+                                            <input type="hidden" name="reservation_id" value="<?php echo $reservation['id']; ?>">
+                                            <button type="submit" name="action" value="approve" class="action-btn approve">Approve</button>
+                                            <button type="submit" name="action" value="cancel" class="action-btn cancel">Cancel</button>
+                                        </form>
+                                    </td>
+                                </tr>
                             <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <button type="submit" name="create_walkin" class="btn btn-primary">Create Booking</button>
-                </form>
-            </div>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
         </section>
     </main>
 </div>
 
 <style>
-/* Styles for the manage reservations page */
-.form__container {
+/* Inherit styles from clerk_dashboard.php */
+.overview__cards, .dashboard__container, .sidebar, .dashboard__content, .dashboard__header, .section__header, .user__info, .user__avatar, .sidebar__header, .sidebar__logo, .sidebar__title, .sidebar__toggle, .sidebar__nav, .sidebar__links, .sidebar__link, .card__icon, .card__content, .section__subheader, .dashboard__section.active, .error {
+    /* Inherit existing styles */
+}
+
+/* Table styles */
+.reservations__table {
+    margin-top: 1.5rem;
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
     background: white;
-    padding: 2rem;
     border-radius: 12px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    margin-bottom: 2rem;
 }
 
-.form__group {
-    margin-bottom: 1rem;
+th, td {
+    padding: 1rem;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
 }
 
-.form__group label {
-    display: block;
-    font-size: 1rem;
-    color: #6b7280;
-    margin-bottom: 0.5rem;
+th {
+    background: #f9fafb;
+    font-weight: 600;
+    color: #1f2937;
 }
 
-.form__group input,
-.form__group select {
-    width: 100%;
-    padding: 0.75rem;
-    border: 1px solid #d1d5db;
+td {
+    color: #4b5563;
+}
+
+.action-btn {
+    padding: 0.5rem 1rem;
+    border: none;
     border-radius: 8px;
-    font-size: 1rem;
-}
-
-.btn {
-    padding: 0.75rem 1.5rem;
-    border-radius: 8px;
-    font-size: 1rem;
     cursor: pointer;
+    font-size: 0.9rem;
+    margin-right: 0.5rem;
+    transition: background 0.2s ease;
 }
 
-.btn-primary {
+.action-btn.approve {
     background: #3b82f6;
     color: white;
-    border: none;
 }
 
-.btn-primary:hover {
+.action-btn.approve:hover {
     background: #2563eb;
 }
 
-.error, .success {
-    padding: 1rem;
-    border-radius: 8px;
-    margin-bottom: 1rem;
+.action-btn.cancel {
+    background: #ef4444;
+    color: white;
 }
 
-.error {
-    background: #fee2e2;
-    color: #dc2626;
+.action-btn.cancel:hover {
+    background: #dc2626;
 }
 
 .success {
-    background: #dcfce7;
     color: #15803d;
-}
-
-.section__subheader {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: #1f2937;
     margin-bottom: 1rem;
 }
 
-h4 {
-    font-size: 1.2rem;
-    font-weight: 600;
-    color: #1f2937;
-    margin: 1.5rem 0 1rem;
-}
-
-.dashboard__section.active {
-    display: block;
-}
-
-/* Sidebar styles */
+/* Sidebar active link */
 .sidebar__link.active {
     background: #3b82f6;
     color: white;

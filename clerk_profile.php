@@ -203,6 +203,12 @@ include 'templates/header.php';
                         <span>Manage Clerks</span>
                     </a>
                 </li>
+                     <li>
+                    <a href="manager_settings.php" class="sidebar__link">
+                        <i class="ri-settings-3-line"></i>
+                        <span>Profile</span>
+                    </a>
+                </li>
                 <li>
                     <a href="logout.php" class="sidebar__link">
                         <i class="ri-logout-box-line"></i>

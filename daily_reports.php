@@ -96,11 +96,11 @@ try {
     $stmt = $pdo->prepare("
         SELECT SUM(p.amount) as revenue
         FROM payments p
-        WHERE p.status = 'completed' AND DATE(p.created_at) = CURDATE()
-        AND (p.reservation_id IN (SELECT id FROM reservations WHERE hotel_id = ?)
-             OR p.group_booking_id IN (SELECT id FROM group_bookings WHERE hotel_id = ?))
+        WHERE p.status = 'completed' 
+        AND DATE(p.created_at) = CURDATE()
+        AND p.reservation_id IN (SELECT id FROM reservations WHERE hotel_id = ?)
     ");
-    $stmt->execute([$branch_id, $branch_id]);
+    $stmt->execute([$branch_id]);
     $payment_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
 
     $daily_revenue = $booking_revenue + $payment_revenue;

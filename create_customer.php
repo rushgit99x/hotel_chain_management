@@ -94,21 +94,15 @@ include 'templates/header.php';
                     </a>
                 </li>
                 <li>
-                    <a href="check_in.php" class="sidebar__link">
-                        <i class="ri-login-box-line"></i>
-                        <span>Check-In Customers</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="check_out.php" class="sidebar__link">
-                        <i class="ri-logout-box-line"></i>
-                        <span>Check-Out Customers</span>
-                    </a>
-                </li>
-                <li>
                     <a href="manage_reservations.php" class="sidebar__link">
                         <i class="ri-calendar-check-line"></i>
                         <span>Manage Reservations</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="manage_check_in_out.php" class="sidebar__link">
+                        <i class="ri-logout-box-line"></i>
+                        <span>Check-In/Out Customers</span>
                     </a>
                 </li>
                 <li>
@@ -127,12 +121,6 @@ include 'templates/header.php';
                     <a href="billing_statements.php" class="sidebar__link">
                         <i class="ri-wallet-line"></i>
                         <span>Billing Statements</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="process_payments.php" class="sidebar__link">
-                        <i class="ri-money-dollar-circle-line"></i>
-                        <span>Process Payments</span>
                     </a>
                 </li>
                 <li>

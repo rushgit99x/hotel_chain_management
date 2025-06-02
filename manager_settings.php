@@ -136,7 +136,7 @@ include 'templates/header.php';
                 <li>
                     <a href="manager_settings.php" class="sidebar__link active">
                         <i class="ri-user-line"></i>
-                        <span>Profile Settings</span>
+                        <span>Profile</span>
                     </a>
                 </li>
                 <li>

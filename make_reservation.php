@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = "Check-in date cannot be in the past.";
     }
 
-    // Occupants validation (simple positive integer)
+    // Occupants validation
     if (!$occupants || $occupants < 1) {
         $errors[] = "Please provide a valid number of occupants (minimum 1).";
     }
@@ -65,42 +65,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // Payment method validation
-    if (!in_array($payment_method, ['credit_card', 'without_credit_card'])) {
-        $errors[] = "Invalid payment method selected.";
+    date_default_timezone_set('Asia/Kolkata');
+    $current_hour = (int) date('H');
+    $restrict_without_card = ($current_hour >= 19 && $current_hour <= 23);
+    if (!$payment_method || !in_array($payment_method, ['credit_card', 'without_credit_card'])) {
+        $errors[] = "Please select a valid payment method.";
+    } elseif ($payment_method === 'without_credit_card' && $restrict_without_card) {
+        $errors[] = "Without credit card payment is not available between 7 PM and 11:59 PM.";
     }
 
-    // Credit card validation only if payment method is credit_card
+    // Credit card validation (only if credit_card is selected)
     if ($payment_method === 'credit_card') {
-        // Cardholder name validation
+        // Cardholder name
         if (!$cardholder_name || strlen(trim($cardholder_name)) < 2) {
-            $errors[] = "Please provide a valid cardholder name.";
+            $errors[] = "Cardholder name must be at least 2 characters.";
         } elseif (!preg_match('/^[a-zA-Z\s\-\.\']+$/', $cardholder_name)) {
             $errors[] = "Cardholder name contains invalid characters.";
         }
 
-        // Card number validation
+        // Card number
         if (!$card_number) {
-            $errors[] = "Please provide a card number.";
+            $errors[] = "Card number is required.";
         } else {
             $clean_card_number = preg_replace('/[\s\-]/', '', $card_number);
             if (!preg_match('/^\d{13,19}$/', $clean_card_number)) {
-                $errors[] = "Please provide a valid card number (13-19 digits).";
+                $errors[] = "Card number must be 13–19 digits.";
+            } elseif (!validateCardNumberLuhn($clean_card_number)) {
+                $errors[] = "Invalid card number (fails Luhn check).";
             } else {
-                if (!validateCardNumberLuhn($clean_card_number)) {
-                    $errors[] = "Please provide a valid card number.";
-                }
                 $card_type = getCardType($clean_card_number);
                 if (!$card_type) {
-                    $errors[] = "Card type not supported.";
+                    $errors[] = "Unsupported card type.";
                 }
             }
         }
 
-        // Expiry date validation
+        // Expiry date
         if (!$card_expiry) {
-            $errors[] = "Please provide an expiry date.";
+            $errors[] = "Expiry date is required.";
         } elseif (!preg_match('/^(0[1-9]|1[0-2])\/\d{2}$/', $card_expiry)) {
-            $errors[] = "Please provide a valid expiry date (MM/YY format).";
+            $errors[] = "Expiry date must be in MM/YY format.";
         } else {
             list($month, $year) = explode('/', $card_expiry);
             $current_year = date('y');
@@ -109,26 +113,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $errors[] = "Card has expired.";
             }
             if ($year > ($current_year + 10)) {
-                $errors[] = "Invalid expiry date.";
+                $errors[] = "Expiry date too far in the future.";
             }
         }
 
-        // CVC validation
+        // CVC
         if (!$card_cvc) {
-            $errors[] = "Please provide a CVC code.";
+            $errors[] = "CVC is required.";
         } elseif (!preg_match('/^\d{3,4}$/', $card_cvc)) {
-            $errors[] = "Please provide a valid CVC (3-4 digits).";
+            $errors[] = "CVC must be 3–4 digits.";
         } else {
             $card_type = isset($clean_card_number) ? getCardType($clean_card_number) : '';
             if ($card_type === 'amex' && strlen($card_cvc) !== 4) {
-                $errors[] = "American Express cards require a 4-digit CVC.";
+                $errors[] = "Amex requires a 4-digit CVC.";
             } elseif ($card_type !== 'amex' && strlen($card_cvc) !== 3) {
-                $errors[] = "Please provide a 3-digit CVC.";
+                $errors[] = "CVC must be 3 digits for non-Amex cards.";
             }
         }
     }
 
-    // Check room type availability at the branch
+    // Check room availability
     if (empty($errors)) {
         try {
             $stmt = $pdo->prepare("
@@ -157,40 +161,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $pdo->beginTransaction();
 
-            // Calculate amount for payment
-            $stmt = $pdo->prepare("
-                SELECT base_price 
-                FROM room_types 
-                WHERE name = ?
-            ");
+            // Get base price
+            $stmt = $pdo->prepare("SELECT base_price FROM room_types WHERE name = ?");
             $stmt->execute([ucfirst($room_type)]);
             $base_price = $stmt->fetch(PDO::FETCH_ASSOC)['base_price'] ?? 100.00;
             $days = (strtotime($check_out_date) - strtotime($check_in_date)) / (60 * 60 * 24);
-            $amount = $base_price * $days * $number_of_rooms;
 
-            // Insert reservation with pending status and appropriate payment_status
+            // Set reservation fee
+            $reservation_fee_per_room = match ($room_type) {
+                'single' => 30.00,
+                'double' => 50.00,
+                'suite' => 70.00,
+                default => 0.00,
+            };
+            $reservation_fee_amount = $reservation_fee_per_room * $number_of_rooms;
+
+            // Calculate discount for suite (remaining balance only)
+            $discount_percentage = 0;
+            if ($room_type === 'suite') {
+                if ($days >= 28) {
+                    $discount_percentage = 10;
+                } elseif ($days >= 21) {
+                    $discount_percentage = 8;
+                } elseif ($days >= 14) {
+                    $discount_percentage = 5;
+                } elseif ($days >= 7) {
+                    $discount_percentage = 3;
+                }
+            }
+            $base_amount = $base_price * $days * $number_of_rooms;
+            $discount_amount = $base_amount * ($discount_percentage / 100);
+            $remaining_balance = $base_amount - $discount_amount;
+            $grand_total = $reservation_fee_amount + $remaining_balance;
+
+            // Insert reservation
             $payment_status = $payment_method === 'credit_card' ? 'paid' : 'unpaid';
             $stmt = $pdo->prepare("
-                INSERT INTO reservations (user_id, hotel_id, room_type, check_in_date, check_out_date, occupants, number_of_rooms, status, payment_status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW())
+                INSERT INTO reservations (user_id, hotel_id, room_type, check_in_date, check_out_date, occupants, number_of_rooms, status, payment_status, discount_percentage, remaining_balance, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NOW())
             ");
-            $stmt->execute([$user_id, $branch_id, htmlspecialchars($room_type), htmlspecialchars($check_in_date), htmlspecialchars($check_out_date), $occupants, $number_of_rooms, $payment_status]);
+            $stmt->execute([$user_id, $branch_id, htmlspecialchars($room_type), htmlspecialchars($check_in_date), htmlspecialchars($check_out_date), $occupants, $number_of_rooms, $payment_status, $discount_percentage, $remaining_balance]);
             $reservation_id = $pdo->lastInsertId();
 
-            // Insert payment for credit card payments
+            // Insert payment (reservation fee only for credit card)
             if ($payment_method === 'credit_card') {
                 $card_last_four = substr($clean_card_number ?? '', -4);
                 $stmt = $pdo->prepare("
                     INSERT INTO payments (user_id, reservation_id, amount, payment_method, card_last_four, cardholder_name, status, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, 'completed', NOW())
                 ");
-                $stmt->execute([$user_id, $reservation_id, $amount, htmlspecialchars($payment_method), $card_last_four, htmlspecialchars($cardholder_name ?? '')]);
+                $stmt->execute([$user_id, $reservation_id, $reservation_fee_amount, htmlspecialchars($payment_method), $card_last_four, htmlspecialchars($cardholder_name ?? '')]);
             }
 
             $pdo->commit();
-            $success = "Reservation created successfully! Reservation ID: $reservation_id";
-            if ($payment_method === 'without_credit_card') {
-                $success .= " Please complete payment before 7 PM to confirm your reservation.";
+            $success = "Reservation created successfully! Reservation ID: $reservation_id.";
+            if ($payment_method === 'credit_card') {
+                $success .= " Reservation Fee Charged: $$reservation_fee_amount (via credit card).";
+            } else {
+                $success .= " Reservation Fee: $$reservation_fee_amount (due at checkout).";
+            }
+            $success .= " Remaining Balance (due at checkout): $$remaining_balance.";
+            if ($discount_percentage > 0) {
+                $success .= " A $discount_percentage% discount ($$discount_amount saved) has been applied to the suite balance.";
             }
         } catch (PDOException $e) {
             $pdo->rollBack();
@@ -203,21 +235,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 function validateCardNumberLuhn($number) {
     $sum = 0;
     $alternate = false;
-    
     for ($i = strlen($number) - 1; $i >= 0; $i--) {
         $digit = intval($number[$i]);
-        
         if ($alternate) {
             $digit *= 2;
             if ($digit > 9) {
                 $digit = ($digit % 10) + 1;
             }
         }
-        
         $sum += $digit;
         $alternate = !$alternate;
     }
-    
     return ($sum % 10 == 0);
 }
 
@@ -228,13 +256,11 @@ function getCardType($number) {
         'amex' => '/^3[47][0-9]{13}$/',
         'discover' => '/^6(?:011|5[0-9]{2})[0-9]{12}$/'
     ];
-    
     foreach ($patterns as $type => $pattern) {
         if (preg_match($pattern, $number)) {
             return $type;
         }
     }
-    
     return false;
 }
 
@@ -251,7 +277,7 @@ try {
     $room_types = [];
 }
 
-// Get customer details for header
+// Get customer details
 try {
     $stmt = $pdo->prepare("SELECT name, email FROM users WHERE id = ? AND role = 'customer'");
     $stmt->execute([$user_id]);
@@ -263,6 +289,11 @@ try {
     $customer_name = 'Customer';
     $customer_email = 'Unknown';
 }
+
+// Time-based payment restriction
+date_default_timezone_set('Asia/Kolkata');
+$current_hour = (int) date('H');
+$restrict_without_card = ($current_hour >= 19 && $current_hour <= 23);
 
 include 'templates/header.php';
 ?>
@@ -287,60 +318,15 @@ include 'templates/header.php';
         </div>
         <nav class="sidebar__nav">
             <ul class="sidebar__links">
-                <li>
-                    <a href="customer_dashboard.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_dashboard.php' ? 'active' : ''; ?>">
-                        <i class="ri-dashboard-line"></i>
-                        <span>Dashboard</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="make_reservation.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'make_reservation.php' ? 'active' : ''; ?>">
-                        <i class="ri-calendar-check-line"></i>
-                        <span>Make Reservation</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="customer_manage_reservations.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_manage_reservations.php' ? 'active' : ''; ?>">
-                        <i class="ri-calendar-line"></i>
-                        <span>Manage Reservations</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="residential_suites.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'residential_suites.php' ? 'active' : ''; ?>">
-                        <i class="ri-home-heart-line"></i>
-                        <span>Residential Suites</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="additional_services.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'additional_services.php' ? 'active' : ''; ?>">
-                        <i class="ri-service-line"></i>
-                        <span>Additional Services</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="billing_payments.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'billing_payments.php' ? 'active' : ''; ?>">
-                        <i class="ri-wallet-line"></i>
-                        <span>Billing & Payments</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="check_in_out.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'check_in_out.php' ? 'active' : ''; ?>">
-                        <i class="ri-hotel-line"></i>
-                        <span>Check-In/Out</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="customer_profile.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_profile.php' ? 'active' : ''; ?>">
-                        <i class="ri-settings-3-line"></i>
-                        <span>Profile</span>
-                    </a>
-                </li>
-                <li>
-                    <a href="logout.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'logout.php' ? 'active' : ''; ?>">
-                        <i class="ri-logout-box-line"></i>
-                        <span>Logout</span>
-                    </a>
-                </li>
+                <li><a href="customer_dashboard.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_dashboard.php' ? 'active' : ''; ?>"><i class="ri-dashboard-line"></i><span>Dashboard</span></a></li>
+                <li><a href="make_reservation.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'make_reservation.php' ? 'active' : ''; ?>"><i class="ri-calendar-check-line"></i><span>Make Reservation</span></a></li>
+                <li><a href="customer_manage_reservations.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_manage_reservations.php' ? 'active' : ''; ?>"><i class="ri-calendar-line"></i><span>Manage Reservations</span></a></li>
+                
+                <li><a href="customer_additional_services.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'additional_services.php' ? 'active' : ''; ?>"><i class="ri-service-line"></i><span>Additional Services</span></a></li>
+                <li><a href="billing_payments.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'billing_payments.php' ? 'active' : ''; ?>"><i class="ri-wallet-line"></i><span>Billing & Payments</span></a></li>
+                
+                <li><a href="customer_profile.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_profile.php' ? 'active' : ''; ?>"><i class="ri-settings-3-line"></i><span>Profile</span></a></li>
+                <li><a href="logout.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'logout.php' ? 'active' : ''; ?>"><i class="ri-logout-box-line"></i><span>Logout</span></a></li>
             </ul>
         </nav>
     </aside>
@@ -387,11 +373,15 @@ include 'templates/header.php';
                     <select id="room_type" name="room_type" required>
                         <option value="">Select room type</option>
                         <?php foreach ($room_types as $type): ?>
-                            <option value="<?php echo strtolower($type['name']); ?>" <?php echo isset($room_type) && $room_type == strtolower($type['name']) ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($type['name'] . ' ($' . number_format($type['base_price'], 2) . '/night)'); ?>
+                            <option value="<?php echo strtolower($type['name']); ?>" <?php echo isset($room_type) && $room_type == strtolower($type['name']) ? 'selected' : ''; ?>
+                                data-price="<?php echo $type['base_price']; ?>" data-reservation-fee="<?php echo match(strtolower($type['name'])) { 'single' => 30.00, 'double' => 50.00, 'suite' => 70.00, default => 0.00 }; ?>">
+                                <?php echo htmlspecialchars($type['name'] . ' ($' . number_format($type['base_price'], 2) . '/night, $' . number_format(match(strtolower($type['name'])) { 'single' => 30.00, 'double' => 50.00, 'suite' => 70.00, default => 0.00 }, 2) . ' reservation fee)'); ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <small class="form__help" id="suite_discount_message" style="display: none; color: #059669;">
+                        Suite bookings are eligible for discounts on the remaining balance: 3% for 1 week, 5% for 2 weeks, 8% for 3 weeks, 10% for 4 weeks or more.
+                    </small>
                 </div>
 
                 <div class="form__group">
@@ -402,6 +392,7 @@ include 'templates/header.php';
                 <div class="form__group">
                     <label for="check_out_date">Check-out Date</label>
                     <input type="date" id="check_out_date" name="check_out_date" value="<?php echo isset($check_out_date) ? htmlspecialchars($check_out_date) : ''; ?>" required min="<?php echo date('Y-m-d', strtotime('+1 day')); ?>">
+                    <small class="form__help" id="discount_applied_message" style="display: none; color: #059669;"></small>
                 </div>
 
                 <div class="form__group">
@@ -416,39 +407,57 @@ include 'templates/header.php';
                     <small class="form__help">How many rooms would you like to reserve?</small>
                 </div>
 
+                <div class="form__group total__cost">
+                    <label>Cost Breakdown</label>
+                    <div class="cost-breakdown">
+                        <div class="cost-item">
+                            <span>Reservation Fee:</span>
+                            <span id="reservation_fee">$0.00</span>
+                        </div>
+                        <div class="cost-item">
+                            <span>Remaining Balance (due at checkout):</span>
+                            <span id="remaining_balance">$0.00</span>
+                        </div>
+                        <div class="cost-item cost-total">
+                            <span>Grand Total:</span>
+                            <span id="grand_total">$0.00</span>
+                        </div>
+                    </div>
+                    <small class="form__help">Reservation fee is charged now for credit card payments; otherwise, due at checkout.</small>
+                </div>
+
                 <div class="form__group">
                     <label for="payment_method">Payment Method</label>
-                    <select id="payment_method" name="payment_method" required onchange="togglePaymentFields()">
-                        <option value="credit_card" <?php echo isset($payment_method) && $payment_method === 'credit_card' ? 'selected' : ''; ?>>Credit Card</option>
-                        <option value="without_credit_card" <?php echo isset($payment_method) && $payment_method === 'without_credit_card' ? 'selected' : ''; ?>>Without Credit Card</option>
+                    <select id="payment_method" name="payment_method" required>
+                        <option value="credit_card">Credit Card</option>
+                        <option value="without_credit_card">Without Credit Card (Pay at Checkout)</option>
                     </select>
-                    <small class="form__help" id="payment-warning" style="display: none; color: #dc2626;">
-                        You must complete payment before 7 PM to confirm your reservation.
+                    <small class="form__help" id="credit-card-required" style="display: <?php echo $restrict_without_card ? 'block' : 'none'; ?>; color: #dc2626;">
+                        Without credit card payment is not available between 7 PM and 11:59 PM.
                     </small>
                 </div>
 
-                <div id="credit_card_fields" style="display: <?php echo isset($payment_method) && $payment_method === 'credit_card' ? 'block' : 'none'; ?>;">
+                <div id="credit_card_fields" style="display: block;">
                     <div class="form__group">
                         <label for="cardholder_name">Cardholder Name</label>
-                        <input type="text" id="cardholder_name" name="cardholder_name" placeholder="John Doe" value="<?php echo isset($cardholder_name) ? htmlspecialchars($cardholder_name) : ''; ?>" <?php echo isset($payment_method) && $payment_method === 'credit_card' ? 'required' : ''; ?>>
-                        <small class="form__help">Name as it appears on the card</small>
+                        <input type="text" id="cardholder_name" name="cardholder_name" placeholder="John Doe" value="<?php echo isset($cardholder_name) ? htmlspecialchars($cardholder_name) : ''; ?>">
+                        <small class="form__error" id="cardholder_name_error"></small>
                     </div>
-                    
                     <div class="form__group">
                         <label for="card_number">Card Number</label>
-                        <input type="text" id="card_number" name="card_number" placeholder="1234 5678 9012 3456" value="<?php echo isset($card_number) ? htmlspecialchars($card_number) : ''; ?>" maxlength="19" <?php echo isset($payment_method) && $payment_method === 'credit_card' ? 'required' : ''; ?>>
-                        <small class="form__help">Enter 13-19 digit card number</small>
+                        <input type="text" id="card_number" name="card_number" placeholder="1234 5678 9012 3456" maxlength="19" value="<?php echo isset($card_number) ? htmlspecialchars($card_number) : ''; ?>">
+                        <small class="form__error" id="card_number_error"></small>
                     </div>
-                    
                     <div class="form__row">
                         <div class="form__group">
                             <label for="card_expiry">Expiry Date</label>
-                            <input type="text" id="card_expiry" name="card_expiry" placeholder="MM/YY" value="<?php echo isset($card_expiry) ? htmlspecialchars($card_expiry) : ''; ?>" maxlength="5" <?php echo isset($payment_method) && $payment_method === 'credit_card' ? 'required' : ''; ?>>
+                            <input type="text" id="card_expiry" name="card_expiry" placeholder="MM/YY" maxlength="5" value="<?php echo isset($card_expiry) ? htmlspecialchars($card_expiry) : ''; ?>">
+                            <small class="form__error" id="card_expiry_error"></small>
                         </div>
                         <div class="form__group">
                             <label for="card_cvc">CVC</label>
-                            <input type="text" id="card_cvc" name="card_cvc" placeholder="123" value="<?php echo isset($card_cvc) ? htmlspecialchars($card_cvc) : ''; ?>" maxlength="4" <?php echo isset($payment_method) && $payment_method === 'credit_card' ? 'required' : ''; ?>>
-                            <small class="form__help">3-4 digits on back of card</small>
+                            <input type="text" id="card_cvc" name="card_cvc" placeholder="123" maxlength="4" value="<?php echo isset($card_cvc) ? htmlspecialchars($card_cvc) : ''; ?>">
+                            <small class="form__error" id="card_cvc_error"></small>
                         </div>
                     </div>
                 </div>
@@ -528,10 +537,47 @@ include 'templates/header.php';
     margin-top: 0.25rem;
 }
 
+.form__error {
+    font-size: 0.875rem;
+    color: #dc2626;
+    margin-top: 0.25rem;
+    display: none;
+}
+
+.form__error.show {
+    display: block;
+}
+
 .form__row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1rem;
+}
+
+.total__cost {
+    background: #f9fafb;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 2px solid #3b82f6;
+}
+
+.cost-breakdown {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.cost-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 1rem;
+}
+
+.cost-total {
+    font-weight: 600;
+    font-size: 1.25rem;
+    color: #1f2937;
+    border-top: 1px solid #d1d5db;
+    padding-top: 0.5rem;
 }
 
 .submit__button {
@@ -688,246 +734,393 @@ include 'templates/header.php';
 </style>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', () => {
     const sidebarToggle = document.getElementById('sidebar-toggle');
     const sidebar = document.getElementById('sidebar');
 
-    // Toggle sidebar
-    sidebarToggle?.addEventListener('click', function() {
+    // Sidebar toggle
+    sidebarToggle?.addEventListener('click', () => {
         sidebar.classList.toggle('collapsed');
         sidebarToggle.querySelector('i').classList.toggle('ri-menu-fold-line');
         sidebarToggle.querySelector('i').classList.toggle('ri-menu-unfold-line');
     });
 
-    // Toggle payment fields and warning message
-    window.togglePaymentFields = function() {
-        const paymentMethod = document.getElementById('payment_method').value;
+    // Payment fields handling
+    const togglePaymentFields = () => {
+        const paymentSelect = document.getElementById('payment_method');
         const creditCardFields = document.getElementById('credit_card_fields');
-        const paymentWarning = document.getElementById('payment-warning');
-        const cardInputs = creditCardFields.querySelectorAll('input');
+        const creditCardRequired = document.getElementById('credit-card-required');
+        
+        // Check if current time is between 19:00 and 23:59
+        const now = new Date();
+        const currentHour = now.getHours();
+        const restrictWithoutCard = currentHour >= 19 && currentHour <= 23;
+        
+        // Enable/disable without credit card option
+        const withoutCardOption = paymentSelect.querySelector('option[value="without_credit_card"]');
+        withoutCardOption.disabled = restrictWithoutCard;
+        creditCardRequired.style.display = restrictWithoutCard ? 'block' : 'none';
+        
+        // Show/hide credit card fields based on selection
+        creditCardFields.style.display = paymentSelect.value === 'credit_card' ? 'block' : 'none';
+        
+        // Update required attributes
+        const creditCardInputs = creditCardFields.querySelectorAll('input');
+        creditCardInputs.forEach(input => {
+            input.required = paymentSelect.value === 'credit_card';
+        });
+    };
 
-        if (paymentMethod === 'credit_card') {
-            creditCardFields.style.display = 'block';
-            paymentWarning.style.display = 'none';
-            cardInputs.forEach(input => input.setAttribute('required', ''));
+    // Cost breakdown update
+    const updateTotalCost = () => {
+        const roomTypeSelect = document.getElementById('room_type');
+        const suiteDiscountMessage = document.getElementById('suite_discount_message');
+        const discountAppliedMessage = document.getElementById('discount_applied_message');
+        const reservationFee = document.getElementById('reservation_fee');
+        const remainingBalance = document.getElementById('remaining_balance');
+        const grandTotal = document.getElementById('grand_total');
+        const checkInDate = document.getElementById('check_in_date').value;
+        const checkOutDate = document.getElementById('check_out_date').value;
+        const numberOfRooms = parseInt(document.getElementById('number_of_rooms').value) || 1;
+        const paymentMethod = document.getElementById('payment_method').value;
+
+        // Show/hide suite discount message
+        suiteDiscountMessage.style.display = roomTypeSelect.value === 'suite' ? 'block' : 'none';
+
+        // Reset costs if no room type selected
+        if (!roomTypeSelect.value) {
+            reservationFee.textContent = '$0.00';
+            remainingBalance.textContent = '$0.00';
+            grandTotal.textContent = '$0.00';
+            discountAppliedMessage.style.display = 'none';
+            return;
+        }
+
+        // Calculate reservation fee
+        const selectedOption = roomTypeSelect.options[roomTypeSelect.selectedIndex];
+        const reservationFeePerRoom = parseFloat(selectedOption.dataset.reservationFee) || 0;
+        const reservationCost = reservationFeePerRoom * numberOfRooms;
+        reservationFee.textContent = paymentMethod === 'credit_card' ? `$${reservationCost.toFixed(2)}` : '$0.00 (Pay at Checkout)';
+
+        // Calculate remaining balance
+        if (checkInDate && checkOutDate) {
+            const checkIn = new Date(checkInDate);
+            const checkOut = new Date(checkOutDate);
+            const days = (checkOut - checkIn) / (1000 * 60 * 60 * 24);
+
+            let discountPercentage = 0;
+            let discountMessage = '';
+            if (roomTypeSelect.value === 'suite') {
+                if (days >= 28) {
+                    discountPercentage = 10;
+                    discountMessage = '10% discount applied for 4+ weeks stay';
+                } else if (days >= 21) {
+                    discountPercentage = 8;
+                    discountMessage = '8% discount applied for 3 weeks stay';
+                } else if (days >= 14) {
+                    discountPercentage = 5;
+                    discountMessage = '5% discount applied for 2 weeks stay';
+                } else if (days >= 7) {
+                    discountPercentage = 3;
+                    discountMessage = '3% discount applied for 1 week stay';
+                }
+            }
+
+            const basePrice = parseFloat(selectedOption.dataset.price) || 100;
+            const baseCost = basePrice * days * numberOfRooms;
+            const discountAmount = baseCost * (discountPercentage / 100);
+            const remainingCost = baseCost - discountAmount;
+            const totalCost = paymentMethod === 'credit_card' ? reservationCost + remainingCost : remainingCost;
+
+            remainingBalance.textContent = `$${remainingCost.toFixed(2)}`;
+            grandTotal.textContent = `$${totalCost.toFixed(2)}`;
+
+            if (discountPercentage > 0) {
+                discountAppliedMessage.textContent = `${discountMessage} ($${discountAmount.toFixed(2)} saved)`;
+                discountAppliedMessage.style.display = 'block';
+            } else {
+                discountAppliedMessage.style.display = 'none';
+            }
         } else {
-            creditCardFields.style.display = 'none';
-            paymentWarning.style.display = 'block';
-            cardInputs.forEach(input => input.removeAttribute('required'));
+            remainingBalance.textContent = '$0.00';
+            grandTotal.textContent = paymentMethod === 'credit_card' ? `$${reservationCost.toFixed(2)}` : '$0.00';
+            discountAppliedMessage.style.display = 'none';
         }
     };
 
-    // Function to reset form to default values
-    function resetFormToDefault() {
-        const form = document.querySelector('.reservation__form');
-        if (form) {
-            // Reset all form fields to default values
-            form.reset();
-            
-            // Set specific default values
-            document.getElementById('branch_id').value = '';
-            document.getElementById('room_type').value = '';
-            document.getElementById('check_in_date').value = '';
-            document.getElementById('check_out_date').value = '';
-            document.getElementById('occupants').value = '1';
-            document.getElementById('number_of_rooms').value = '1';
-            document.getElementById('payment_method').value = 'credit_card';
-            
-            // Clear credit card fields
-            document.getElementById('cardholder_name').value = '';
-            document.getElementById('card_number').value = '';
-            document.getElementById('card_expiry').value = '';
-            document.getElementById('card_cvc').value = '';
-            
-            // Reset min date for check-in to today
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('check_in_date').setAttribute('min', today);
-            
-            // Reset min date for check-out to tomorrow
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            document.getElementById('check_out_date').setAttribute('min', tomorrow.toISOString().split('T')[0]);
-            
-            // Show credit card fields by default and hide payment warning
-            document.getElementById('credit_card_fields').style.display = 'block';
-            document.getElementById('payment-warning').style.display = 'none';
-            
-            // Set required attributes for credit card fields
-            const cardInputs = document.getElementById('credit_card_fields').querySelectorAll('input');
-            cardInputs.forEach(input => input.setAttribute('required', ''));
-            
-            console.log('Form reset to default values');
+    // Credit card validation functions
+    const validateCardholderName = (name) => {
+        if (!name || name.trim().length < 2) {
+            return 'Name must be at least 2 characters.';
         }
-    }
+        if (!/^[a-zA-Z\s\-\.\']+$/.test(name)) {
+            return 'Name contains invalid characters.';
+        }
+        return '';
+    };
 
-    // Check if there's a success message and reset form after successful reservation
-    const successMessage = document.querySelector('.success');
-    if (successMessage) {
-        // Add a small delay to allow user to see the success message
-        setTimeout(function() {
-            resetFormToDefault();
-            
-            // Optional: Show a brief notification that form has been reset
-            const resetNotification = document.createElement('div');
-            resetNotification.innerHTML = '<small style="color: #059669; font-style: italic;">Form has been reset for your next reservation</small>';
-            resetNotification.style.cssText = 'margin-top: 10px; padding: 5px; background: #ecfdf5; border-radius: 4px; border-left: 3px solid #10b981;';
-            
-            successMessage.appendChild(resetNotification);
-            
-            // Remove the reset notification after 3 seconds
-            setTimeout(function() {
-                if (resetNotification.parentNode) {
-                    resetNotification.remove();
+    const validateCardNumber = (number) => {
+        const cleanNumber = number.replace(/\D/g, '');
+        if (!/^\d{13,19}$/.test(cleanNumber)) {
+            return 'Card number must be 13–19 digits.';
+        }
+        if (!luhnCheck(cleanNumber)) {
+            return 'Invalid card number.';
+        }
+        if (!getCardType(cleanNumber)) {
+            return 'Unsupported card type.';
+        }
+        return '';
+    };
+
+    const validateExpiryDate = (expiry) => {
+        if (!/^(0[1-9]|1[0-2])\/\d{2}$/.test(expiry)) {
+            return 'Invalid format (MM/YY).';
+        }
+        const [month, year] = expiry.split('/').map(Number);
+        const currentYear = new Date().getFullYear() % 100;
+        const currentMonth = new Date().getMonth() + 1;
+        if (year < currentYear || (year === currentYear && month < currentMonth)) {
+            return 'Card has expired.';
+        }
+        if (year > currentYear + 10) {
+            return 'Expiry date too far in future.';
+        }
+        return '';
+    };
+
+    const validateCVC = (cvc, cardNumber) => {
+        if (!/^\d{3,4}$/.test(cvc)) {
+            return 'CVC must be 3–4 digits.';
+        }
+        const cleanNumber = cardNumber.replace(/\D/g, '');
+        const cardType = getCardType(cleanNumber);
+        if (cardType === 'amex' && cvc.length !== 4) {
+            return 'Amex requires 4-digit CVC.';
+        }
+        if (cardType !== 'amex' && cvc.length !== 3) {
+            return 'CVC must be 3 digits.';
+        }
+        return '';
+    };
+
+    const luhnCheck = (number) => {
+        let sum = 0;
+        let alternate = false;
+        for (let i = number.length - 1; i >= 0; i--) {
+            let digit = parseInt(number[i]);
+            if (alternate) {
+                digit *= 2;
+                if (digit > 9) {
+                    digit = (digit % 10) + 1;
                 }
-            }, 3000);
-            
-        }, 2000); // Wait 2 seconds before resetting
-        
-        // Hide the success message after 5 seconds total
-        setTimeout(function() {
-            if (successMessage.parentNode) {
-                // Add fade out animation
-                successMessage.style.transition = 'opacity 0.5s ease-out';
-                successMessage.style.opacity = '0';
-                
-                // Remove the element after fade out
-                setTimeout(function() {
-                    if (successMessage.parentNode) {
-                        successMessage.remove();
-                    }
-                }, 500);
             }
-        }, 5000); // Wait 5 seconds before hiding success message
-    }
+            sum += digit;
+            alternate = !alternate;
+        }
+        return sum % 10 === 0;
+    };
 
-    // Card number formatting
-    const cardNumberInput = document.getElementById('card_number');
-    if (cardNumberInput) {
-        cardNumberInput.addEventListener('input', function(e) {
-            let value = e.target.value.replace(/\D/g, '');
-            value = value.replace(/(\d{4})(?=\d)/g, '$1 ');
-            if (value.length > 19) {
-                value = value.substring(0, 19);
+    const getCardType = (number) => {
+        const patterns = {
+            visa: /^4[0-9]{12}(?:[0-9]{3})?$/,
+            mastercard: /^5[1-5][0-9]{14}$/,
+            amex: /^3[47][0-9]{13}$/,
+            discover: /^6(?:011|5[0-9]{2})[0-9]{12}$/
+        };
+        for (const [type, pattern] of Object.entries(patterns)) {
+            if (pattern.test(number)) {
+                return type;
             }
-            e.target.value = value;
-        });
-    }
+        }
+        return null;
+    };
 
-    // Expiry date formatting
-    const cardExpiryInput = document.getElementById('card_expiry');
-    if (cardExpiryInput) {
-        cardExpiryInput.addEventListener('input', function(e) {
-            let value = e.target.value.replace(/\D/g, '');
-            if (value.length >= 2) {
-                value = value.substring(0, 2) + '/' + value.substring(2, 4);
-            }
-            e.target.value = value;
-        });
-    }
+    // Show/hide error messages
+    const showError = (fieldId, message) => {
+        const errorElement = document.getElementById(`${fieldId}_error`);
+        errorElement.textContent = message;
+        errorElement.classList.toggle('show', !!message);
+    };
 
-    // CVC input - numbers only
-    const cardCvcInput = document.getElementById('card_cvc');
-    if (cardCvcInput) {
-        cardCvcInput.addEventListener('input', function(e) {
-            e.target.value = e.target.value.replace(/\D/g, '');
-        });
-    }
-
-    // Date validation
+    // Attach event listeners for cost updates
+    const roomTypeSelect = document.getElementById('room_type');
     const checkInDate = document.getElementById('check_in_date');
     const checkOutDate = document.getElementById('check_out_date');
-    
-    if (checkInDate && checkOutDate) {
-        checkInDate.addEventListener('change', function() {
-            const checkInDate = new Date(this.value);
-            const minCheckOut = new Date(checkInDate);
-            minCheckOut.setDate(minCheckOut.getDate() + 1);
-            checkOutDate.min = minCheckOut.toISOString().split('T')[0];
-            
-            if (checkOutDate.value && new Date(checkOutDate.value) <= checkInDate) {
-                checkOutDate.value = '';
-            }
-        });
-    }
+    const numberOfRooms = document.getElementById('number_of_rooms');
+    const paymentMethodSelect = document.getElementById('payment_method');
 
-    // Form validation before submission
-    const reservationForm = document.querySelector('.reservation__form');
-    if (reservationForm) {
-        reservationForm.addEventListener('submit', function(e) {
-            const errors = [];
-            const paymentMethod = document.getElementById('payment_method').value;
-            
-            // Check dates
+    roomTypeSelect.addEventListener('change', updateTotalCost);
+    checkInDate.addEventListener('change', updateTotalCost);
+    checkOutDate.addEventListener('change', updateTotalCost);
+    numberOfRooms.addEventListener('input', updateTotalCost);
+    paymentMethodSelect.addEventListener('change', () => togglePaymentFields() || updateTotalCost());
+
+    // Credit card input handling
+    const cardholderNameInput = document.getElementById('cardholder_name');
+    const cardNumberInput = document.getElementById('card_number');
+    const cardExpiryInput = document.getElementById('card_expiry');
+    const cardCvcInput = document.getElementById('card_cvc');
+
+    cardholderNameInput.addEventListener('input', () => {
+        showError('cardholder_name', validateCardholderName(cardholderNameInput.value));
+    });
+    cardholderNameInput.addEventListener('blur', () => {
+        showError('cardholder_name', validateCardholderName(cardholderNameInput.value));
+    });
+
+    cardNumberInput.addEventListener('input', (e) => {
+        let value = e.target.value.replace(/\D/g, '');
+        value = value.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+        e.target.value = value.slice(0, 19);
+        showError('card_number', validateCardNumber(value));
+    });
+    cardNumberInput.addEventListener('blur', () => {
+        showError('card_number', validateCardNumber(cardNumberInput.value));
+    });
+
+    cardExpiryInput.addEventListener('input', (e) => {
+        let value = e.target.value.replace(/\D/g, '');
+        if (value.length >= 2) {
+            value = value.slice(0, 2) + '/' + value.slice(2, 4);
+        }
+        e.target.value = value.slice(0, 5);
+        showError('card_expiry', validateExpiryDate(value));
+    });
+    cardExpiryInput.addEventListener('blur', () => {
+        showError('card_expiry', validateExpiryDate(cardExpiryInput.value));
+    });
+
+    cardCvcInput.addEventListener('input', () => {
+        cardCvcInput.value = cardCvcInput.value.replace(/\D/g, '').slice(0, 4);
+        showError('card_cvc', validateCVC(cardCvcInput.value, cardNumberInput.value));
+    });
+    cardCvcInput.addEventListener('blur', () => {
+        showError('card_cvc', validateCVC(cardCvcInput.value, cardNumberInput.value));
+    });
+
+    // Form validation on submit
+    const form = document.querySelector('.reservation__form');
+    form.addEventListener('submit', (e) => {
+        const errors = [];
+        const paymentMethod = paymentMethodSelect.value;
+
+        // Basic form validation
+        if (!roomTypeSelect.value) {
+            errors.push('Please select a room type.');
+        }
+        if (!checkInDate.value) {
+            errors.push('Please select a check-in date.');
+        }
+        if (!checkOutDate.value) {
+            errors.push('Please select a check-out date.');
+        }
+        if (checkInDate.value && checkOutDate.value) {
             const checkIn = new Date(checkInDate.value);
             const checkOut = new Date(checkOutDate.value);
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-            
             if (checkIn < today) {
-                errors.push('Check-in date cannot be in the past');
+                errors.push('Check-in date cannot be in the past.');
             }
-            
             if (checkOut <= checkIn) {
-                errors.push('Check-out date must be after check-in date');
+                errors.push('Check-out date must be after check-in date.');
             }
-            
-            // Check occupants
-            const occupants = parseInt(document.getElementById('occupants').value);
-            if (!occupants || occupants < 1) {
-                errors.push('Please provide a valid number of occupants');
+        }
+        const occupants = parseInt(document.getElementById('occupants').value);
+        if (!occupants || occupants < 1) {
+            errors.push('Please provide a valid number of occupants.');
+        }
+        const numberOfRoomsValue = parseInt(numberOfRooms.value);
+        if (!numberOfRoomsValue || numberOfRoomsValue < 1) {
+            errors.push('Please provide a valid number of rooms.');
+        } else if (numberOfRoomsValue > 10) {
+            errors.push('Cannot reserve more than 10 rooms.');
+        }
+
+        // Payment method validation
+        const now = new Date();
+        const currentHour = now.getHours();
+        if (paymentMethod === 'without_credit_card' && currentHour >= 19 && currentHour <= 23) {
+            errors.push('Without credit card payment is not available between 7 PM and 11:59 PM.');
+        }
+
+        // Credit card validation (only if credit_card is selected)
+        if (paymentMethod === 'credit_card') {
+            const cardholderNameError = validateCardholderName(cardholderNameInput.value);
+            if (cardholderNameError) {
+                errors.push(cardholderNameError);
+                showError('cardholder_name', cardholderNameError);
             }
-            
-            // Check number of rooms
-            const numberOfRooms = parseInt(document.getElementById('number_of_rooms').value);
-            if (!numberOfRooms || numberOfRooms < 1) {
-                errors.push('Please provide a valid number of rooms');
-            } else if (numberOfRooms > 10) {
-                errors.push('Cannot reserve more than 10 rooms at once');
+            const cardNumberError = validateCardNumber(cardNumberInput.value);
+            if (cardNumberError) {
+                errors.push(cardNumberError);
+                showError('card_number', cardNumberError);
             }
-            
-            // Credit card validation only if payment method is credit_card
-            if (paymentMethod === 'credit_card') {
-                const creditCardNumber = document.getElementById('card_number').value.replace(/\s/g, '');
-                const creditCardExpiry = document.getElementById('card_expiry').value;
-                const creditCardCvc = document.getElementById('card_cvc').value;
-                const creditCardHolderName = document.getElementById('cardholder_name').value.trim();
-                
-                if (!creditCardHolderName || creditCardHolderName.length < 2) {
-                    errors.push('Please provide a valid cardholder name');
-                }
-                
-                if (!creditCardNumber || !/^\d{13,19}$/.test(creditCardNumber)) {
-                    errors.push('Please provide a valid credit card number');
-                }
-                
-                if (!creditCardExpiry || !/^(0[1-9]|1[0-2])\/\d{2}$/.test(creditCardExpiry)) {
-                    errors.push('Please provide a valid expiry date (MM/YY)');
-                } else {
-                    const [month, year] = creditCardExpiry.split('/');
-                    const currentYear = new Date().getFullYear() % 100;
-                    const currentMonth = new Date().getMonth() + 1;
-                    
-                    if (parseInt(year) < currentYear || 
-                        (parseInt(year) === currentYear && parseInt(month) < currentMonth)) {
-                        errors.push('Credit card has expired');
-                    }
-                }
-                
-                if (!creditCardCvc || !/^\d{3,4}$/.test(creditCardCvc)) {
-                    errors.push('Please provide a valid CVC (3-4 digits)');
-                }
+            const cardExpiryError = validateExpiryDate(cardExpiryInput.value);
+            if (cardExpiryError) {
+                errors.push(cardExpiryError);
+                showError('card_expiry', cardExpiryError);
             }
-            
-            // Display errors if any
-            if (errors.length > 0) {
-                e.preventDefault();
-                alert('Please fix the following errors:\n\n' + errors.join('\n'));
+            const cardCvcError = validateCVC(cardCvcInput.value, cardNumberInput.value);
+            if (cardCvcError) {
+                errors.push(cardCvcError);
+                showError('card_cvc', cardCvcError);
             }
+        }
+
+        if (errors.length > 0) {
+            e.preventDefault();
+            alert('Please fix the following errors:\n\n' + errors.join('\n'));
+        }
+    });
+
+    // Reset form after success
+    const resetFormToDefault = () => {
+        form.reset();
+        document.getElementById('branch_id').value = '';
+        document.getElementById('room_type').value = '';
+        document.getElementById('check_in_date').value = '';
+        document.getElementById('check_out_date').value = '';
+        document.getElementById('occupants').value = '1';
+        document.getElementById('number_of_rooms').value = '1';
+        document.getElementById('payment_method').value = 'credit_card';
+        document.getElementById('cardholder_name').value = '';
+        document.getElementById('card_number').value = '';
+        document.getElementById('card_expiry').value = '';
+        document.getElementById('card_cvc').value = '';
+        const today = new Date().toISOString().split('T')[0];
+        checkInDate.min = today;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        checkOutDate.min = tomorrow.toISOString().split('T')[0];
+        ['cardholder_name', 'card_number', 'card_expiry', 'card_cvc'].forEach(id => {
+            showError(id, '');
         });
+        togglePaymentFields();
+        updateTotalCost();
+    };
+
+    const successMessage = document.querySelector('.success');
+    if (successMessage) {
+        setTimeout(() => {
+            resetFormToDefault();
+            const resetNotification = document.createElement('div');
+            resetNotification.innerHTML = '<small style="color: #059669; font-style: italic;">Form has been reset for your next reservation</small>';
+            resetNotification.style.cssText = 'margin-top: 10px; padding: 5px; background: #ecfdf5; border-radius: 4px; border-left: 3px solid #10b981;';
+            successMessage.appendChild(resetNotification);
+            setTimeout(() => resetNotification.remove(), 3000);
+        }, 2000);
+        setTimeout(() => {
+            successMessage.style.transition = 'opacity 0.5s ease-out';
+            successMessage.style.opacity = '0';
+            setTimeout(() => successMessage.remove(), 500);
+        }, 5000);
     }
 
-    // Initialize states
+    // Initialize
     togglePaymentFields();
+    updateTotalCost();
 });
 </script>
 </body>

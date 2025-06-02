@@ -40,20 +40,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         } catch (Exception $e) {
             $error = "Error updating booking: " . $e->getMessage();
         }
-    } elseif (isset($_POST['update_group_booking'])) {
-        $group_booking_id = (int)$_POST['group_booking_id'];
-        $status = sanitize($_POST['status']);
-        try {
-            // Validate status
-            if (!in_array($status, ['pending', 'confirmed', 'cancelled'])) {
-                throw new Exception("Invalid status value.");
-            }
-            $stmt = $pdo->prepare("UPDATE group_bookings SET status = ? WHERE id = ?");
-            $stmt->execute([$status, $group_booking_id]);
-            $success = "Group booking updated successfully!";
-        } catch (Exception $e) {
-            $error = "Error updating group booking: " . $e->getMessage();
-        }
     }
 }
 
@@ -66,13 +52,6 @@ try {
                          LEFT JOIN room_types rt ON r.room_type_id = rt.id 
                          ORDER BY b.created_at DESC");
     $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $stmt = $pdo->query("SELECT gb.*, cp.company_name, br.name AS branch_name 
-                         FROM group_bookings gb 
-                         JOIN company_profiles cp ON gb.company_id = cp.id 
-                         JOIN branches br ON gb.hotel_id = br.id 
-                         ORDER BY gb.created_at DESC");
-    $group_bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $error = "Error fetching data: " . $e->getMessage();
 }
@@ -170,59 +149,6 @@ include 'templates/header.php';
                         <?php if (empty($bookings)): ?>
                             <tr>
                                 <td colspan="8">No individual bookings found.</td>
-                            </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <section id="manage-group-bookings" class="dashboard__section">
-            <h2 class="section__subheader">Group Bookings</h2>
-            <div class="table__container">
-                <table class="data__table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Company</th>
-                            <th>Branch</th>
-                            <th>Room Count</th>
-                            <th>Room Type</th>
-                            <th>Check-In</th>
-                            <th>Check-Out</th>
-                            <th>Discount</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($group_bookings as $gb): ?>
-                            <tr>
-                                <td><?php echo $gb['id']; ?></td>
-                                <td><?php echo htmlspecialchars($gb['company_name'] ?? 'Unknown'); ?></td>
-                                <td><?php echo htmlspecialchars($gb['branch_name']); ?></td>
-                                <td><?php echo $gb['room_count']; ?></td>
-                                <td><?php echo htmlspecialchars($gb['room_type']); ?></td>
-                                <td><?php echo $gb['check_in_date']; ?></td>
-                                <td><?php echo $gb['check_out_date']; ?></td>
-                                <td><?php echo number_format($gb['discount_rate'], 2); ?>%</td>
-                                <td><?php echo htmlspecialchars($gb['status']); ?></td>
-                                <td>
-                                    <form method="POST" style="display:inline;">
-                                        <input type="hidden" name="group_booking_id" value="<?php echo $gb['id']; ?>">
-                                        <select name="status" required>
-                                            <option value="pending" <?php echo $gb['status'] == 'pending' ? 'selected' : ''; ?>>Pending</option>
-                                            <option value="confirmed" <?php echo $gb['status'] == 'confirmed' ? 'selected' : ''; ?>>Confirmed</option>
-                                            <option value="cancelled" <?php echo $gb['status'] == 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
-                                        </select>
-                                        <button type="submit" name="update_group_booking" class="btn btn--primary">Update</button>
-                                    </form>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        <?php if (empty($group_bookings)): ?>
-                            <tr>
-                                <td colspan="10">No group bookings found.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>

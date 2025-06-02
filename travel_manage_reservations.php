@@ -4,8 +4,8 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Restrict access to customers only
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'customer') {
+// Restrict access to travel companies only
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'travel_company') {
     header("Location: login.php");
     exit();
 }
@@ -70,6 +70,40 @@ function getCardType($cardNumber) {
 date_default_timezone_set('Asia/Kolkata');
 $current_hour = (int) date('H');
 $restrict_without_card = ($current_hour >= 19 && $current_hour <= 23);
+
+// Handle AJAX request for reservation details
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'fetch_details') {
+    header('Content-Type: application/json');
+    $reservation_id = filter_input(INPUT_POST, 'reservation_id', FILTER_VALIDATE_INT);
+    
+    if (!$reservation_id) {
+        echo json_encode(['error' => 'Invalid reservation ID']);
+        exit();
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT r.id, r.hotel_id, r.room_type, r.check_in_date, r.check_out_date, r.occupants, 
+                   r.number_of_rooms, r.status, r.payment_status, r.discount_percentage, r.remaining_balance,
+                   b.name AS branch_name, b.location AS branch_location, rt.base_price
+            FROM reservations r
+            JOIN branches b ON r.hotel_id = b.id
+            JOIN room_types rt ON r.room_type = rt.name
+            WHERE r.id = ? AND r.user_id = ?
+        ");
+        $stmt->execute([$reservation_id, $user_id]);
+        $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($reservation) {
+            echo json_encode($reservation);
+        } else {
+            echo json_encode(['error' => 'Reservation not found']);
+        }
+    } catch (PDOException $e) {
+        echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit();
+}
 
 // Handle payment submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'pay') {
@@ -396,12 +430,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-// Fetch customer reservations
+// Fetch company profile
+try {
+    $stmt = $pdo->prepare("SELECT company_name, contact_phone FROM company_profiles WHERE user_id = ?");
+    $stmt->execute([$user_id]);
+    $company = $stmt->fetch(PDO::FETCH_ASSOC);
+    $company_name = $company['company_name'] ?? 'Travel Company';
+    $contact_phone = $company['contact_phone'] ?? 'Unknown';
+} catch (PDOException $e) {
+    $errors[] = "Database error: " . $e->getMessage();
+    $company_name = 'Travel Company';
+    $contact_phone = 'Unknown';
+}
+
+// Fetch reservations
 try {
     $stmt = $pdo->prepare("
         SELECT r.id, r.hotel_id, r.room_type, r.check_in_date, r.check_out_date, r.occupants, r.number_of_rooms, 
                r.status, r.payment_status, r.discount_percentage, r.remaining_balance, 
-               b.name as branch_name, b.location, rt.base_price
+               b.name AS branch_name, b.location, rt.base_price
         FROM reservations r
         JOIN branches b ON r.hotel_id = b.id
         JOIN room_types rt ON r.room_type = rt.name
@@ -428,19 +475,6 @@ try {
     $room_types = [];
 }
 
-// Get customer details for header
-try {
-    $stmt = $pdo->prepare("SELECT name, email FROM users WHERE id = ? AND role = 'customer'");
-    $stmt->execute([$user_id]);
-    $user = $stmt->fetch(PDO::FETCH_ASSOC);
-    $customer_name = $user['name'] ?? 'Customer';
-    $customer_email = $user['email'] ?? 'Unknown';
-} catch (PDOException $e) {
-    $errors[] = "Database error: " . $e->getMessage();
-    $customer_name = 'Customer';
-    $customer_email = 'Unknown';
-}
-
 include 'templates/header.php';
 ?>
 
@@ -449,7 +483,7 @@ include 'templates/header.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Reservations - Customer Dashboard</title>
+    <title>Manage Reservations - Travel Company Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/remixicon@4.3.0/fonts/remixicon.css" rel="stylesheet">
 </head>
 <body>
@@ -457,21 +491,19 @@ include 'templates/header.php';
     <aside class="sidebar" id="sidebar">
         <div class="sidebar__header">
             <img src="/hotel_chain_management/assets/images/logo.png?v=<?php echo time(); ?>" alt="logo" class="sidebar__logo" />
-            <h2 class="sidebar__title">Customer Dashboard</h2>
+            <h2 class="sidebar__title">Travel Company Dashboard</h2>
             <button class="sidebar__toggle" id="sidebar-toggle">
                 <i class="ri-menu-fold-line"></i>
             </button>
         </div>
         <nav class="sidebar__nav">
             <ul class="sidebar__links">
-                <li><a href="customer_dashboard.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_dashboard.php' ? 'active' : ''; ?>"><i class="ri-dashboard-line"></i><span>Dashboard</span></a></li>
-                <li><a href="make_reservation.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'make_reservation.php' ? 'active' : ''; ?>"><i class="ri-calendar-check-line"></i><span>Make Reservation</span></a></li>
-                <li><a href="customer_manage_reservations.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_manage_reservations.php' ? 'active' : ''; ?>"><i class="ri-calendar-line"></i><span>Manage Reservations</span></a></li>
-                
-                <li><a href="customer_additional_services.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'additional_services.php' ? 'active' : ''; ?>"><i class="ri-service-line"></i><span>Additional Services</span></a></li>
-                <li><a href="billing_payments.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'billing_payments.php' ? 'active' : ''; ?>"><i class="ri-wallet-line"></i><span>Billing & Payments</span></a></li>
-                
-                <li><a href="customer_profile.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'customer_profile.php' ? 'active' : ''; ?>"><i class="ri-settings-3-line"></i><span>Profile</span></a></li>
+                <li><a href="travel_company_dashboard.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'travel_dashboard.php' ? 'active' : ''; ?>"><i class="ri-dashboard-line"></i><span>Dashboard</span></a></li>
+                <li><a href="make_travel_reservations.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'make_travel_reservations.php' ? 'active' : ''; ?>"><i class="ri-calendar-check-line"></i><span>Make Reservations</span></a></li>
+                <li><a href="travel_manage_reservations.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'travel_manage_reservations.php' ? 'active' : ''; ?>"><i class="ri-calendar-line"></i><span>Manage Reservations</span></a></li>
+                <li><a href="travel_additional_services.php" class="sidebar__link" <?php echo basename($_SERVER['PHP_SELF']) === 'travel_additional_services.php' ? 'active' : ''; ?>">  <i class="ri-service-line"></i><span>Additional Services</span></a></li>
+                <li><a href="travel_billing_payments.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'travel_billing_payments.php' ? 'active' : ''; ?>"><i class="ri-wallet-line"></i><span>Billing & Payments</span></a></li>
+                <li><a href="company_profile.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'company_profile.php' ? 'active' : ''; ?>"><i class="ri-settings-3-line"></i><span>Profile</span></a></li>
                 <li><a href="logout.php" class="sidebar__link <?php echo basename($_SERVER['PHP_SELF']) === 'logout.php' ? 'active' : ''; ?>"><i class="ri-logout-box-line"></i><span>Logout</span></a></li>
             </ul>
         </nav>
@@ -481,7 +513,7 @@ include 'templates/header.php';
         <header class="dashboard__header">
             <h1 class="section__header">Manage Your Reservations</h1>
             <div class="user__info">
-                <span><?php echo htmlspecialchars($customer_email); ?></span>
+                <span><?php echo htmlspecialchars($company_name); ?> (<?php echo htmlspecialchars($contact_phone); ?>)</span>
                 <img src="/hotel_chain_management/assets/images/avatar.png?v=<?php echo time(); ?>" alt="avatar" class="user__avatar" />
             </div>
         </header>
@@ -549,6 +581,7 @@ include 'templates/header.php';
                                     </td>
                                     <td><?php echo $reservation['discount_percentage'] > 0 ? htmlspecialchars($reservation['discount_percentage'] . '%') : '-'; ?></td>
                                     <td>
+                                        <button class="action__button view__button" onclick="showDetails(<?php echo $reservation['id']; ?>)">View</button>
                                         <?php if ($reservation['payment_status'] === 'unpaid' && $reservation['status'] !== 'cancelled'): ?>
                                             <button class="action__button pay__button" onclick="showPaymentForm(<?php echo $reservation['id']; ?>, '<?php echo $reservation['room_type']; ?>', '<?php echo $reservation['check_in_date']; ?>', '<?php echo $reservation['check_out_date']; ?>', <?php echo $reservation['number_of_rooms']; ?>, <?php echo $reservation['base_price']; ?>)">Pay</button>
                                         <?php endif; ?>
@@ -561,6 +594,15 @@ include 'templates/header.php';
                             <?php endforeach; ?>
                         </tbody>
                     </table>
+                </div>
+
+                <!-- Details Modal -->
+                <div class="modal" id="detailsModal" style="display: none;">
+                    <div class="modal__content">
+                        <span class="modal__close" onclick="hideDetails()">×</span>
+                        <h2>Reservation Details</h2>
+                        <div id="modal__body"></div>
+                    </div>
                 </div>
 
                 <!-- Payment Form (Hidden by default) -->
@@ -852,6 +894,15 @@ include 'templates/header.php';
     font-size: 0.9rem;
 }
 
+.view__button {
+    background: #3b82f6;
+    color: white;
+}
+
+.view__button:hover {
+    background: #2563eb;
+}
+
 .pay__button {
     background: #10b981;
     color: white;
@@ -1042,6 +1093,45 @@ td:last-child {
     border-radius: 50%;
 }
 
+/* Modal Styles */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal__content {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    max-width: 500px;
+    width: 90%;
+    position: relative;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.modal__close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: #1f2937;
+}
+
+.modal__body p {
+    margin: 0.5rem 0;
+    font-size: 1rem;
+    color: #1f2937;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .sidebar {
@@ -1080,6 +1170,8 @@ td:last-child {
 document.addEventListener('DOMContentLoaded', function() {
     const sidebarToggle = document.getElementById('sidebar-toggle');
     const sidebar = document.getElementById('sidebar');
+    const detailsModal = document.getElementById('detailsModal');
+    const modalBody = document.getElementById('modal__body');
 
     // Toggle sidebar
     sidebarToggle?.addEventListener('click', function() {
@@ -1329,11 +1421,59 @@ document.addEventListener('DOMContentLoaded', function() {
         errorElement.classList.toggle('show', !!message);
     };
 
+    // Show details
+    window.showDetails = function(reservationId) {
+        fetch('', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `action=fetch_details&reservation_id=${reservationId}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                modalBody.innerHTML = `<p style="color: #dc2626;">${data.error}</p>`;
+            } else {
+                const days = Math.round((new Date(data.check_out_date) - new Date(data.check_in_date)) / (1000 * 60 * 60 * 24));
+                modalBody.innerHTML = `
+                    <p><strong>Reservation ID:</strong> ${data.id}</p>
+                    <p><strong>Branch:</strong> ${data.branch_name} - ${data.branch_location}</p>
+                    <p><strong>Room Type:</strong> ${data.room_type.charAt(0).toUpperCase() + data.room_type.slice(1)}</p>
+                    <p><strong>Check-in Date:</strong> ${data.check_in_date}</p>
+                    <p><strong>Check-out Date:</strong> ${data.check_out_date}</p>
+                    <p><strong>Duration:</strong> ${days} day${days > 1 ? 's' : ''}</p>
+                    <p><strong>Occupants:</strong> ${data.occupants}</p>
+                    <p><strong>Number of Rooms:</strong> ${data.number_of_rooms}</p>
+                    <p><strong>Status:</strong> ${data.status.charAt(0).toUpperCase() + data.status.slice(1)}</p>
+                    <p><strong>Payment Status:</strong> ${data.payment_status.charAt(0).toUpperCase() + data.payment_status.slice(1)}</p>
+                    <p><strong>Discount:</strong> ${data.discount_percentage}%</p>
+                    <p><strong>Remaining Balance:</strong> $${parseFloat(data.remaining_balance).toFixed(2)}</p>
+                `;
+            }
+            detailsModal.style.display = 'flex';
+        })
+        .catch(error => {
+            modalBody.innerHTML = `<p style="color: #dc2626;">Failed to load details: ${error.message}</p>`;
+            detailsModal.style.display = 'flex';
+        });
+        document.getElementById('payment_form').style.display = 'none';
+        document.getElementById('edit_form').style.display = 'none';
+        document.getElementById('cancel_form').style.display = 'none';
+    };
+
+    // Hide details
+    window.hideDetails = function() {
+        detailsModal.style.display = 'none';
+        modalBody.innerHTML = '';
+    };
+
     // Show payment form
     window.showPaymentForm = function(reservationId, roomType, checkInDate, checkOutDate, numberOfRooms, basePrice) {
         document.getElementById('payment_form').style.display = 'block';
         document.getElementById('edit_form').style.display = 'none';
         document.getElementById('cancel_form').style.display = 'none';
+        detailsModal.style.display = 'none';
         document.getElementById('payment_reservation_id').value = reservationId;
         updatePaymentCost(roomType, checkInDate, checkOutDate, numberOfRooms, basePrice);
         togglePaymentFields();
@@ -1358,6 +1498,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('edit_form').style.display = 'block';
         document.getElementById('payment_form').style.display = 'none';
         document.getElementById('cancel_form').style.display = 'none';
+        detailsModal.style.display = 'none';
         document.getElementById('edit_reservation_id').value = reservationId;
         document.getElementById('edit_branch_id').value = branchId;
         document.getElementById('edit_room_type').value = roomType.toLowerCase();
@@ -1390,6 +1531,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('cancel_form').style.display = 'block';
         document.getElementById('payment_form').style.display = 'none';
         document.getElementById('edit_form').style.display = 'none';
+        detailsModal.style.display = 'none';
         document.getElementById('cancel_reservation_id').value = reservationId;
         window.scrollTo({ top: document.getElementById('cancel_form').offsetTop, behavior: 'smooth' });
     };
@@ -1411,11 +1553,11 @@ document.addEventListener('DOMContentLoaded', function() {
         editRoomTypeSelect.addEventListener('change', updateEditCost);
     }
     if (editCheckInDate) {
-        editCheckInDate.addEventListener('change', () => {
-            const checkInDate = new Date(editCheckInDate.value);
-            const minCheckOut = new Date(checkInDate);
-            minCheckOut.setDate(minCheckOut.getDate() + 1);
-            editCheckOutDate.min = minCheckOut.toISOString().split('T')[0];
+        editCheckInDate.addEventListener('change', function() {
+            let checkInDate = new Date(editCheckInDate.value);
+            let minCheckOutDate = new Date(checkInDate);
+            minCheckOutDate.setDate(minCheckOutDate.getDate() + 1);
+            editCheckOutDate.min = minCheckOutDate.toISOString().split('T')[0];
             if (editCheckOutDate.value && new Date(editCheckOutDate.value) <= checkInDate) {
                 editCheckOutDate.value = '';
             }
@@ -1483,7 +1625,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Form validation on submit
+    // Form validation on submission
     const forms = document.querySelectorAll('.reservation__form');
     forms.forEach(form => {
         form.addEventListener('submit', (e) => {
@@ -1521,8 +1663,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             } else if (action === 'edit') {
-                const checkIn = new Date(editCheckInDate.value);
-                const checkOut = new Date(editCheckOutDate.value);
+                const checkInDate = new Date(editCheckInDate.value);
+                const checkOutDate = new Date(editCheckOutDate.value);
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 
@@ -1531,14 +1673,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 if (!editCheckInDate.value) {
                     errors.push('Please select a check-in date.');
+                } else if (checkInDate < today) {
+                    errors.push('Check-in date cannot be in the past.');
                 }
                 if (!editCheckOutDate.value) {
                     errors.push('Please select a check-out date.');
-                }
-                if (checkIn < today) {
-                    errors.push('Check-in date cannot be in the past.');
-                }
-                if (checkOut <= checkIn) {
+                } else if (checkOutDate <= checkInDate) {
                     errors.push('Check-out date must be after check-in date.');
                 }
                 const occupants = parseInt(editOccupants.value);
@@ -1567,9 +1707,10 @@ document.addEventListener('DOMContentLoaded', function() {
             hidePaymentForm();
             hideEditForm();
             hideCancelForm();
+            hideDetails();
             const resetNotification = document.createElement('div');
             resetNotification.innerHTML = '<small style="color: #059669; font-style: italic;">Forms have been reset</small>';
-            resetNotification.style.cssText = 'margin-top: 10px; padding: 5px; background: #ecfdf5; border-radius: 4px; border-left: 3px solid #10b981;';
+            resetNotification.style.cssText = 'margin-top: 10px; padding: 8px; background: #ecfdf5; border-radius: 4px; border-left: 3px solid #10b981;';
             successMessage.appendChild(resetNotification);
             setTimeout(() => resetNotification.remove(), 3000);
             successMessage.style.transition = 'opacity 0.5s ease-out';
