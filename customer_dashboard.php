@@ -201,7 +201,7 @@ include 'templates/header.php';
             </div>
 
             <!-- Quick Actions -->
-            <div class="quick-actions">
+            <!-- <div class="quick-actions">
                 <h3 class="section__subheader">Quick Actions</h3>
                 <div class="action__buttons">
                     <a href="make_reservation.php" class="action__button">New Reservation</a>
@@ -209,7 +209,7 @@ include 'templates/header.php';
                     <a href="customer_additional_services.php" class="action__button">Request Service</a>
                     <a href="billing_payments.php" class="action__button">Pay Now</a>
                 </div>
-            </div>
+            </div> -->
         </section>
     </main>
 </div>

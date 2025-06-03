@@ -2,6 +2,17 @@
 include_once 'includes/functions.php';
 include 'templates/header.php';
 
+// Include PHPMailer classes
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+use PHPMailer\PHPMailer\SMTP;
+
+require 'lib/PHPMailer/src/Exception.php';
+require 'lib/PHPMailer/src/PHPMailer.php';
+require 'lib/PHPMailer/src/SMTP.php';
+
+// require 'vendor/autoload.php'; // Adjust path if PHPMailer is installed via Composer
+
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $name = sanitize($_POST['name']);
     $email = sanitize($_POST['email']);
@@ -14,9 +25,258 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $error = "Invalid role selected.";
     } else {
         try {
+            // Insert user into database
             $stmt = $pdo->prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)");
             $stmt->execute([$name, $email, $password, $role]);
-            $success = "Registration successful! <a href='login.php' style='color: #e91e63; font-weight: 600; text-decoration: underline;'>Login here</a>.";
+
+            // Initialize PHPMailer
+            $mail = new PHPMailer(true);
+            try {
+                // Server settings
+                $mail->isSMTP();
+                $mail->Host = 'smtp.gmail.com'; // Replace with your SMTP host
+                $mail->SMTPAuth = true;
+                $mail->Username = 'rushbiz99x@gmail.com'; // Replace with your SMTP username
+                $mail->Password = 'ngok qakc yqun dvfp'; // Replace with your SMTP password
+                $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                $mail->Port = 587; // Adjust port as needed (587 for TLS, 465 for SSL)
+
+                // Recipients
+                $mail->setFrom('rushbiz99x@gmail.com', 'Velo Resort & Spa');
+                $mail->addAddress($email, $name);
+
+                // Content
+                $mail->isHTML(true);
+                $mail->Subject = 'Welcome to Velo Resort & Spa!';
+                // $mail->Body = "
+                //     <h2>Welcome, $name!</h2>
+                //     <p>Thank you for registering with Velo Resort & Spa. Your account has been successfully created.</p>
+                //     <p><strong>Account Type:</strong> " . ucfirst($role) . "</p>
+                //     <p>You can now log in to your account and start exploring our services:</p>
+                //     <p><a href='http://yourdomain.com/login.php' style='color: #e91e63; text-decoration: none; font-weight: bold;'>Login to Your Account</a></p>
+                //     <p>If you have any questions, feel free to contact us at support@veloresort.com.</p>
+                //     <p>Best regards,<br>The Velo Resort & Spa Team</p>
+                // ";
+
+                $mail->Body = "
+                    <!DOCTYPE html>
+                    <html lang='en'>
+                    <head>
+                        <meta charset='UTF-8'>
+                        <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+                        <title>Welcome to Velo Resort &amp; Spa</title>
+                        <style>
+                            body {
+                                margin: 0;
+                                padding: 0;
+                                font-family: 'Arial', sans-serif;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                color: #333;
+                            }
+                            .email-container {
+                                max-width: 600px;
+                                margin: 0 auto;
+                                background: #ffffff;
+                                border-radius: 15px;
+                                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                                overflow: hidden;
+                            }
+                            .header {
+                                background: linear-gradient(135deg, #e91e63 0%, #ad1457 100%);
+                                color: white;
+                                text-align: center;
+                                padding: 40px 20px;
+                                position: relative;
+                            }
+                            .header::before {
+                                content: '';
+                                position: absolute;
+                                top: 0;
+                                left: 0;
+                                right: 0;
+                                bottom: 0;
+                                background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><defs><pattern id=\"spa-pattern\" x=\"0\" y=\"0\" width=\"20\" height=\"20\" patternUnits=\"userSpaceOnUse\"><circle cx=\"10\" cy=\"10\" r=\"1\" fill=\"rgba(255,255,255,0.1)\"/></pattern></defs><rect width=\"100\" height=\"100\" fill=\"url(%23spa-pattern)\"/></svg>');
+                                opacity: 0.3;
+                            }
+                            .header h1 {
+                                margin: 0;
+                                font-size: 2.5em;
+                                font-weight: 300;
+                                letter-spacing: 2px;
+                                position: relative;
+                                z-index: 1;
+                            }
+                            .spa-icon {
+                                font-size: 3em;
+                                margin-bottom: 10px;
+                                position: relative;
+                                z-index: 1;
+                            }
+                            .content {
+                                padding: 40px 30px;
+                                line-height: 1.6;
+                            }
+                            .welcome-message {
+                                font-size: 1.3em;
+                                color: #2c3e50;
+                                margin-bottom: 25px;
+                                text-align: center;
+                                font-weight: 300;
+                            }
+                            .account-info {
+                                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                                padding: 20px;
+                                border-radius: 10px;
+                                margin: 25px 0;
+                                border-left: 4px solid #e91e63;
+                            }
+                            .account-type {
+                                font-size: 1.1em;
+                                color: #495057;
+                                margin: 0;
+                            }
+                            .account-type strong {
+                                color: #e91e63;
+                                font-weight: 600;
+                            }
+                            .cta-section {
+                                text-align: center;
+                                margin: 35px 0;
+                            }
+                            .login-button {
+                                display: inline-block;
+                                background: linear-gradient(135deg, #e91e63 0%, #ad1457 100%);
+                                color: white !important;
+                                text-decoration: none;
+                                padding: 15px 40px;
+                                border-radius: 50px;
+                                font-weight: 600;
+                                font-size: 1.1em;
+                                letter-spacing: 1px;
+                                transition: all 0.3s ease;
+                                box-shadow: 0 8px 25px rgba(233, 30, 99, 0.3);
+                                text-transform: uppercase;
+                            }
+                            .login-button:hover {
+                                transform: translateY(-2px);
+                                box-shadow: 0 12px 35px rgba(233, 30, 99, 0.4);
+                            }
+                            .services-preview {
+                                background: linear-gradient(135deg, #ffeaa7 0%, #fab1a0 100%);
+                                padding: 25px;
+                                border-radius: 10px;
+                                margin: 25px 0;
+                                text-align: center;
+                            }
+                            .services-title {
+                                color: #2d3436;
+                                font-size: 1.2em;
+                                margin-bottom: 15px;
+                                font-weight: 600;
+                            }
+                            .services-list {
+                                color: #636e72;
+                                font-size: 0.95em;
+                                line-height: 1.5;
+                            }
+                            .contact-info {
+                                background: #f1f3f4;
+                                padding: 20px;
+                                border-radius: 10px;
+                                margin: 25px 0;
+                                text-align: center;
+                            }
+                            .contact-email {
+                                color: #e91e63;
+                                text-decoration: none;
+                                font-weight: 600;
+                            }
+                            .footer {
+                                background: linear-gradient(135deg, #2d3436 0%, #636e72 100%);
+                                color: white;
+                                text-align: center;
+                                padding: 30px 20px;
+                                margin-top: 0;
+                            }
+                            .signature {
+                                font-style: italic;
+                                font-size: 1.1em;
+                                margin: 0;
+                            }
+                            .brand-name {
+                                color: #e91e63;
+                                font-weight: 600;
+                                letter-spacing: 1px;
+                            }
+                            @media only screen and (max-width: 600px) {
+                                .email-container {
+                                    margin: 10px;
+                                    border-radius: 10px;
+                                }
+                                .content {
+                                    padding: 25px 20px;
+                                }
+                                .header h1 {
+                                    font-size: 2em;
+                                }
+                                .login-button {
+                                    padding: 12px 30px;
+                                    font-size: 1em;
+                                }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class='email-container'>
+                            <div class='header'>
+                                <div class='spa-icon'>🌺</div>
+                                <h1>Welcome to Velo Resort &amp; Spa</h1>
+                            </div>
+                            
+                            <div class='content'>
+                                <p class='welcome-message'>Hello <strong>$name</strong>!</p>
+                                
+                                <p>Thank you for choosing <strong class='brand-name'>Velo Resort &amp; Spa</strong>. Your account has been successfully created and you're now part of our exclusive community.</p>
+                                
+                                <div class='account-info'>
+                                    <p class='account-type'><strong>Account Type:</strong> " . ucfirst($role) . "</p>
+                                </div>
+                                
+                                <div class='services-preview'>
+                                    <div class='services-title'>🏖️ What awaits you:</div>
+                                    <div class='services-list'>
+                                        Luxury accommodations • World-class spa treatments<br>
+                                        Fine dining experiences • Exclusive member benefits
+                                    </div>
+                                </div>
+                                
+                                <div class='cta-section'>
+                                    <p>Ready to begin your journey of relaxation and luxury?</p>
+                                    <a href='http://yourdomain.com/login.php' class='login-button'>Access Your Account</a>
+                                </div>
+                                
+                                <div class='contact-info'>
+                                    <p>Need assistance? We're here to help!</p>
+                                    <p>Contact us at <a href='mailto:support@veloresort.com' class='contact-email'>support@veloresort.com</a></p>
+                                </div>
+                            </div>
+                            
+                            <div class='footer'>
+                                <p class='signature'>With warm regards,<br><span class='brand-name'>The Velo Resort &amp; Spa Team</span></p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                ";
+
+
+                $mail->AltBody = "Welcome, $name!\n\nThank you for registering with Velo Resort & Spa. Your account has been successfully created.\n\nAccount Type: " . ucfirst($role) . "\n\nYou can now log in to your account at: http://yourdomain.com/login.php\n\nIf you have any questions, contact us at support@veloresort.com.\n\nBest regards,\nThe Velo Resort & Spa Team";
+
+                $mail->send();
+                $success = "Registration successful! A confirmation email has been sent to $email. <a href='login.php' style='color: #e91e63; font-weight: 600; text-decoration: underline;'>Login here</a>.";
+            } catch (Exception $e) {
+                $error = "Registration successful, but failed to send confirmation email: {$mail->ErrorInfo}. <a href='login.php' style='color: #e91e63; font-weight: 600; text-decoration: underline;'>Login here</a>.";
+            }
         } catch (PDOException $e) {
             $error = "Error: " . $e->getMessage();
         }
@@ -343,7 +603,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         color: #e91e63;
     }
 
-    /* Role selection styling */
     .role-options {
         display: flex;
         gap: 1rem;
@@ -385,7 +644,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         transform: translateY(-1px);
     }
 
-    /* Responsive design */
     @media (max-width: 480px) {
         body {
             padding: 1rem;
@@ -411,7 +669,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     }
 
-    /* Extra small screens */
     @media (max-width: 360px) {
         .register-container {
             padding: 1.5rem;
@@ -419,14 +676,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     }
 
-    /* Larger screens - prevent form from being too wide */
     @media (min-width: 1200px) {
         .register-container {
             max-width: 420px;
         }
     }
 
-    /* Loading animation for form submission */
     .register-button.loading {
         background: #9ca3af;
         cursor: not-allowed;
@@ -451,7 +706,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         100% { transform: rotate(360deg); }
     }
 
-    /* Ensure perfect centering on all screen sizes */
     .main-container {
         display: flex;
         align-items: center;
@@ -464,7 +718,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 </style>
 
 <div class="background-elements">
-    <!-- Floating Hotel Icons -->
     <svg class="floating-icon" width="60" height="60" viewBox="0 0 24 24" fill="white">
         <path d="M7 13c1.66 0 3-1.34 3-3S8.66 7 7 7s-3 1.34-3 3 1.34 3 3 3zm12-6h-8v7H3V6H1v15h2v-3h18v3h2v-9c0-2.21-1.79-4-4-4z"/>
     </svg>
@@ -616,14 +869,12 @@ function validateRegisterForm() {
         return false;
     }
     
-    // Add loading state
     registerBtn.classList.add('loading');
     registerBtn.textContent = 'Creating Account...';
     
     return true;
 }
 
-// Add subtle animations on input focus
 document.querySelectorAll('.form-input').forEach(input => {
     input.addEventListener('focus', function() {
         this.parentElement.style.transform = 'translateY(-2px)';
@@ -634,7 +885,6 @@ document.querySelectorAll('.form-input').forEach(input => {
     });
 });
 
-// Role selection animation
 document.querySelectorAll('.role-radio').forEach(radio => {
     radio.addEventListener('change', function() {
         document.querySelectorAll('.role-label').forEach(label => {

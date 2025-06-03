@@ -562,9 +562,9 @@ if (isset($_GET['logout'])) {
         <a href="register.php" class="auth-link register-link">
             Don't have an account? Create one here →
         </a>
-        <a href="forgot_password.php" class="auth-link">
+        <!-- <a href="forgot_password.php" class="auth-link">
             Forgot your password?
-        </a>
+        </a> -->
     </div>
 </div>
 
