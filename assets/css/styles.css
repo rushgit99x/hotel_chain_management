@@ -202,7 +202,8 @@ nav {
 .input__group {
   flex: 1 1 220px;
   display: flex;
-  align-items: center;
+  align-items: left-center;
+  flex-direction: column;
   justify-content: center;
   gap: 1rem;
 }
@@ -471,7 +472,7 @@ nav {
 .footer__container {
   display: grid;
   gap: 4rem 2rem;
-  background-color: var(--text-dark);
+  background-color: var(--white);
 }
 
 .footer__col .section__description {
@@ -482,7 +483,7 @@ nav {
   margin-bottom: 2rem;
   font-size: 1.2rem;
   font-weight: 500;
-  color: var(--white);
+  color: var(--text-dark);
 }
 
 .footer__links {
@@ -497,7 +498,7 @@ nav {
 }
 
 .footer__links a:hover {
-  color: var(--white);
+  color: var(--primary-color);
 }
 
 .footer__socials {

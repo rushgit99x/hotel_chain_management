@@ -357,14 +357,6 @@ include 'templates/header.php';
     justify-content: center;
 }
 
-.card__content h3 {
-たく
-
-System: ### Updated `customer_dashboard.php`
-
-Below is the updated `customer_dashboard.php` with all references to `group_bookings` removed, as requested. The changes include removing the `group_bookings` metric, updating the queries for `upcoming_reservations` and `past_reservations` to exclude `group_bookings`, and removing the commented-out navigation link for group bookings. The styling, JavaScript, and other functionalities remain unchanged to maintain consistency with the original dashboard.
-
-<xaiArtifact artifact_id="2c7b972b-a918-4321-810c-508993c1d371" artifact_version_id="1d1cbc96-95b9-4514-8e36-740b840beaf1" title="customer_dashboard.php" contentType="text/x-php">
 <?php
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
