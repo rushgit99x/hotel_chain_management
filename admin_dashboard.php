@@ -331,7 +331,7 @@ include 'templates/header.php';
 }
 
 .sidebar__link:hover {
-    background: #333333;
+    background:rgba(232,37,116,255);
 }
 
 .sidebar__link.active {

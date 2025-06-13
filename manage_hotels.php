@@ -59,71 +59,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } catch (PDOException $e) {
             $error = "Error deleting branch: " . $e->getMessage();
         }
-    } elseif (isset($_POST['update_room'])) {
-        $room_id = (int)$_POST['room_id'];
-        $room_number = sanitize($_POST['room_number']);
-        $room_type_id = (int)$_POST['room_type_id'];
-        $status = sanitize($_POST['status']);
-
-        // Validate inputs
-        if (empty($room_number) || !in_array($status, ['available', 'occupied', 'maintenance'])) {
-            $error = "Valid room number and status are required.";
-        } else {
-            try {
-                // Check for duplicate room number within the same branch
-                $stmt = $pdo->prepare("SELECT branch_id FROM rooms WHERE id = ?");
-                $stmt->execute([$room_id]);
-                $branch_id = $stmt->fetchColumn();
-                $stmt = $pdo->prepare("SELECT COUNT(*) FROM rooms WHERE room_number = ? AND branch_id = ? AND id != ?");
-                $stmt->execute([$room_number, $branch_id, $room_id]);
-                if ($stmt->fetchColumn() > 0) {
-                    $error = "Room number already exists in this branch.";
-                } else {
-                    $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, room_type_id = ?, status = ? WHERE id = ?");
-                    $stmt->execute([$room_number, $room_type_id, $status, $room_id]);
-                    $success = "Room updated successfully!";
-                }
-            } catch (PDOException $e) {
-                $error = "Error updating room: " . $e->getMessage();
-            }
-        }
-    } elseif (isset($_POST['delete_room'])) {
-        $room_id = (int)$_POST['room_id'];
-        try {
-            // Check if room has associated bookings
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM bookings WHERE room_id = ?");
-            $stmt->execute([$room_id]);
-            $booking_count = $stmt->fetchColumn();
-            if ($booking_count > 0) {
-                $error = "Cannot delete room with existing bookings.";
-            } else {
-                $stmt = $pdo->prepare("DELETE FROM rooms WHERE id = ?");
-                $stmt->execute([$room_id]);
-                $success = "Room deleted successfully!";
-            }
-        } catch (PDOException $e) {
-            $error = "Error deleting room: " . $e->getMessage();
-        }
     }
 }
 
-// Fetch all branches, rooms, and room types
+// Fetch all branches
 try {
     $stmt = $pdo->query("SELECT * FROM branches ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    $stmt = $pdo->query("SELECT r.*, b.name AS branch_name, rt.name AS room_type_name, rt.base_price 
-                         FROM rooms r 
-                         JOIN branches b ON r.branch_id = b.id 
-                         LEFT JOIN room_types rt ON r.room_type_id = rt.id 
-                         ORDER BY b.name, r.room_number");
-    $rooms = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    $stmt = $pdo->query("SELECT * FROM room_types ORDER BY name");
-    $room_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $error = "Error fetching data: " . $e->getMessage();
-    $branches = $rooms = $room_types = [];
+    $branches = [];
 }
 
 include 'templates/header.php';
@@ -227,50 +172,6 @@ include 'templates/header.php';
                 <?php endif; ?>
             </div>
         </section>
-
-        <!-- Manage Rooms Section -->
-        <section id="manage-rooms" class="dashboard__section">
-            <h2 class="section__subheader">Manage Rooms</h2>
-            <div class="table__container">
-                <?php if (empty($rooms)): ?>
-                    <p class="text-muted text-center">No rooms available.</p>
-                <?php else: ?>
-                    <div class="table__wrapper">
-                        <table class="data__table">
-                            <thead>
-                                <tr>
-                                    <th><i class="ri-hashtag me-1"></i>ID</th>
-                                    <th><i class="ri-building-line me-1"></i>Branch</th>
-                                    <th><i class="ri-home-line me-1"></i>Room Number</th>
-                                    <th><i class="ri-home-2-line me-1"></i>Room Type</th>
-                                    <th><i class="ri-money-dollar-circle-line me-1"></i>Price</th>
-                                    <th><i class="ri-checkbox-circle-line me-1"></i>Status</th>
-                                    <th><i class="ri-settings-3-line me-1"></i>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($rooms as $room): ?>
-                                    <tr>
-                                        <td><span class="table__badge table__badge--light"><?php echo $room['id']; ?></span></td>
-                                        <td><?php echo htmlspecialchars($room['branch_name']); ?></td>
-                                        <td><strong><?php echo htmlspecialchars($room['room_number']); ?></strong></td>
-                                        <td><?php echo htmlspecialchars($room['room_type_name'] ?? 'Not Assigned'); ?></td>
-                                        <td><span class="table__badge table__badge--info"><?php echo isset($room['base_price']) ? '$' . number_format($room['base_price'], 2) : 'N/A'; ?></span></td>
-                                        <td><?php echo htmlspecialchars($room['status']); ?></td>
-                                        <td>
-                                            <div class="btn__group">
-                                                <button type="button" class="btn btn--small btn--primary" onclick="openEditRoomModal(<?php echo $room['id']; ?>, '<?php echo addslashes(htmlspecialchars($room['room_number'])); ?>', <?php echo $room['room_type_id'] ?? 0; ?>, '<?php echo $room['status']; ?>')" title="Edit Room"><i class="ri-edit-line"></i></button>
-                                                <button type="button" class="btn btn--small btn--danger" onclick="confirmDelete('room', <?php echo $room['id']; ?>)" title="Delete Room"><i class="ri-delete-bin-line"></i></button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </section>
     </main>
 </div>
 
@@ -305,50 +206,6 @@ include 'templates/header.php';
     </div>
 </div>
 
-<!-- Edit Room Modal -->
-<div class="modal" id="editRoomModal">
-    <div class="modal__dialog">
-        <div class="modal__content">
-            <div class="modal__header">
-                <h5 class="modal__title"><i class="ri-edit-line me-2"></i>Edit Room</h5>
-                <button type="button" class="modal__close" onclick="closeModal('editRoomModal')"><i class="ri-close-line"></i></button>
-            </div>
-            <div class="modal__body">
-                <form method="POST" id="editRoomForm">
-                    <input type="hidden" name="room_id" id="editRoomId">
-                    <div class="form__group">
-                        <label for="editRoomNumber" class="form__label">Room Number</label>
-                        <input type="text" id="editRoomNumber" name="room_number" class="form__input" required>
-                    </div>
-                    <div class="form__group">
-                        <label for="editRoomType" class="form__label">Room Type</label>
-                        <select id="editRoomType" name="room_type_id" class="form__select" required>
-                            <option value="0">Not Assigned</option>
-                            <?php foreach ($room_types as $type): ?>
-                                <option value="<?php echo $type['id']; ?>"><?php echo htmlspecialchars($type['name']); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form__group">
-                        <label for="editRoomStatus" class="form__label">Status</label>
-                        <select id="editRoomStatus" name="status" class="form__select" required>
-                            <option value="available">Available</option>
-                            <option value="occupied">Occupied</option>
-                            <option value="maintenance">Maintenance</option>
-                        </select>
-                    </div>
-                </form>
-            </div>
-            <div class="modal__footer">
-                <button type="button" class="btn btn--secondary" onclick="closeModal('editRoomModal')">Cancel</button>
-                <button type="submit" form="editRoomForm" name="update_room" class="btn btn--primary">
-                    <i class="ri-save-line me-1"></i>Save Changes
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Delete Confirmation Modal -->
 <div class="modal" id="deleteModal">
     <div class="modal__dialog">
@@ -364,8 +221,7 @@ include 'templates/header.php';
                 <button type="button" class="btn btn--secondary" onclick="closeModal('deleteModal')">Cancel</button>
                 <form method="POST" style="display:inline;" id="deleteForm">
                     <input type="hidden" name="branch_id" id="deleteBranchId">
-                    <input type="hidden" name="room_id" id="deleteRoomId">
-                    <button type="submit" name="" id="deleteButton" class="btn btn--danger">
+                    <button type="submit" name="delete_branch" id="deleteButton" class="btn btn--danger">
                         <i class="ri-delete-bin-line me-1"></i>Delete
                     </button>
                 </form>
@@ -528,38 +384,40 @@ include 'templates/header.php';
 .form__group {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
 }
 
 .form__label {
     font-weight: 600;
     color: #374151;
-    font-size: 0.25rem;
+    font-size: 1rem;
+    text-transform: capitalize;
 }
 
 .form__input,
 .form__select {
-    padding: 0.5rem;
+    padding: 0.75rem;
     background-color: #ffffff;
-    border: 2px solid #333333;
+    border: 2px solid #d1d5db;
     color: #000000;
     border-radius: 8px;
     width: 100%;
     height: 40px;
     font-size: 1rem;
-    transition: border-color 0.3s ease, box-shadow:0.3s ease;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .form__input:focus,
 .form__select:focus {
-    outline: 2px solid #000000;
-    border-color: #333333;
-    box-shadow: 0 0 0px 3px rgba(0, 0, 0);
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 
 /* Button Styles */
 .btn {
-    padding: 0.25rem;
+    padding: 0.75rem 1.5rem;
     border: none;
     background-color: #333333;
     color: #ffffff;
@@ -567,10 +425,9 @@ include 'templates/header.php';
     font-size: 1rem;
     font-weight: 600;
     cursor: pointer;
-    display: inline-block;
+    display: inline-flex;
     align-items: center;
-    gap: 1rem;
-    justify-content: center;
+    gap: 0.5rem;
     transition: all 0.3s ease;
 }
 
@@ -589,7 +446,7 @@ include 'templates/header.php';
 }
 
 .btn--secondary {
-    background: #666633;
+    background: #6b7280;
     color: white;
 }
 
@@ -607,8 +464,7 @@ include 'templates/header.php';
 }
 
 .btn--small {
-    padding: 0.25rem;
-    background-color: #333333;
+    padding: 0.25rem 0.75rem;
     font-size: 0.9rem;
 }
 
@@ -620,27 +476,26 @@ include 'templates/header.php';
 
 /* Alert Styles */
 .alert {
-    padding: 0.25rem;
-    border-radius: 1px;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
     display: flex;
     align-items: center;
     gap: 1rem;
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
     background-color: #ffffff;
     font-weight: bold;
     transition: opacity 0.3s ease, transform 0.3s ease;
+    border: 2px solid #333333;
 }
 
 .alert--success {
     background: #d1fae5;
     color: #065f46;
-    border: 2px solid #333333;
 }
 
 .alert--error {
     background: #fee2e2;
-    color: #991b1;
-    border: 2px solid #333333;
+    color: #991b1b;
 }
 
 /* Table Styles */
@@ -649,7 +504,7 @@ include 'templates/header.php';
     padding: 2rem;
     border-radius: 12px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    margin-top: 10px;
+    margin-top: 1rem;
 }
 
 .table__wrapper {
@@ -663,7 +518,7 @@ include 'templates/header.php';
 
 .data__table th,
 .data__table td {
-    padding: 10px;
+    padding: 0.75rem;
     text-align: center;
     border-bottom: 2px solid #333333;
 }
@@ -682,14 +537,14 @@ include 'templates/header.php';
 }
 
 .data__table tr:hover {
-    background: #333333;
+    background:rgb(211, 211, 211);
     color: #ffffff;
 }
 
 .table__badge {
-    font-size: 12px;
+    font-size: 0.75rem;
     font-weight: normal;
-    padding: 4px 8px;
+    padding: 0.25rem 0.5rem;
     border-radius: 12px;
     background: #e5e7eb;
     color: #374151;
@@ -697,11 +552,6 @@ include 'templates/header.php';
 
 .table__badge--light {
     background: #f3f4f6;
-}
-
-.table__badge--info {
-    background: #3b82f6;
-    color: white;
 }
 
 /* Modal Styles */
@@ -716,6 +566,8 @@ include 'templates/header.php';
     align-items: center;
     justify-content: center;
     z-index: 1001;
+    overflow-y: auto;
+    padding: 1rem;
 }
 
 .modal.active {
@@ -725,76 +577,73 @@ include 'templates/header.php';
 .modal__dialog {
     max-width: 500px;
     width: 95%;
+    background: #ffffff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from { transform: translateY(-50px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
 }
 
 .modal__content {
-    background: white;
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
 }
 
 .modal__header {
     background: #3b82f6;
-    color: white;
-    padding: 1rem 1.5rem;
+    color: #ffffff;
+    padding: 1.5rem 1.5rem 1rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .modal__title {
-    font-size: 1.25rem;
+    font-size: 1.5rem;
     font-weight: 600;
     margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .modal__close {
     background: none;
     border: none;
-    color: white;
-    font-size: 1.25rem;
+    color: #ffffff;
+    font-size: 1.5rem;
     cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.modal__close:hover {
+    color: #f87171;
 }
 
 .modal__body {
     padding: 2rem;
     color: #1f2937;
+    flex-grow: 1;
+    overflow-y: auto;
 }
 
 .modal__footer {
-    padding: 1rem 1.5rem;
-    border-top: 1px solid #333333;
+    padding: 1.5rem;
+    border-top: 1px solid #e5e7eb;
     display: flex;
+    justify-content: flex-end;
     gap: 1rem;
-    justify-content: center;
+    background: #f9fafb;
 }
 
-/* General Styles */
-.section__subheader {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: #1f2937;
-    margin-bottom: 1rem;
-}
-
-.text-muted {
-    color: #6b7280;
-}
-
-.text-center {
-    text-align: center;
-}
-
-.me-1 {
-    margin-right: 0.25rem;
-}
-
-.me-2 {
-    margin-right: 0.5rem;
-}
-
-/* Mobile Responsive Styles */
+/* Responsive Adjustments */
 @media (max-width: 768px) {
     .sidebar {
         transform: translateX(-250px);
@@ -849,13 +698,13 @@ include 'templates/header.php';
     }
 
     .btn {
-        padding: 0.25rem;
+        padding: 0.5rem 1rem;
         font-size: 0.95rem;
     }
 
     .data__table th,
     .data__table td {
-        padding: 0.25rem;
+        padding: 0.5rem;
         font-size: 0.9rem;
     }
 
@@ -865,24 +714,43 @@ include 'templates/header.php';
     }
 
     .btn--small {
-        padding: 0.25rem;
+        padding: 0.25rem 0.5rem;
         font-size: 0.85rem;
     }
 
     .modal__dialog {
-        width: 95%;
+        width: 90%;
+    }
+
+    .modal__header {
+        padding: 1rem;
+    }
+
+    .modal__body {
+        padding: 1.5rem;
+    }
+
+    .modal__footer {
+        padding: 1rem;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .btn {
+        width: 100%;
+        justify-content: center;
     }
 }
 
 @media (max-width: 480px) {
     .dashboard__content {
-        padding: 0.25rem;
+        padding: 0.75rem;
     }
 
     .dashboard__header {
         flex-direction: column;
         align-items: flex-start;
-        gap: 0.25rem;
+        gap: 0.5rem;
     }
 
     .user__info {
@@ -890,53 +758,77 @@ include 'templates/header.php';
     }
 
     .user__avatar {
-        width: 0.25rem;
-        height: 0.25rem;
+        width: 1.5rem;
+        height: 1.5rem;
     }
 
     .form__container {
         width: auto;
-        padding: 0.25rem;
+        padding: 0.75rem;
     }
 
     .form__label {
-        font-size: 0.25rem;
+        font-size: 0.875rem;
     }
 
     .form__input,
     .form__select {
-        font-size: 0.25rem;
-        padding: 0.25rem;
+        font-size: 0.875rem;
+        padding: 0.5rem;
     }
 
     .btn {
-        padding: 0.25rem;
+        padding: 0.5rem 1rem;
         font-size: 0.9rem;
     }
 
     .data__table th,
     .data__table td {
-        font-size: 0.25rem;
+        font-size: 0.75rem;
         padding: 0.25rem;
     }
 
     .btn__group {
         flex-direction: column;
-        gap: 0.25rem;
+        gap: 0.5rem;
     }
 
     .modal__title {
-        font-size: 0.25rem;
+        font-size: 1.25rem;
     }
 
     .modal__body {
-        padding: 0.25rem;
+        padding: 1rem;
     }
 
     .modal__footer {
         flex-direction: column;
-        gap: 0.25rem;
+        gap: 0.5rem;
     }
+}
+
+/* General Styles */
+.section__subheader {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1f2937;
+    margin-bottom: 1rem;
+}
+
+.text-muted {
+    color: #6b7280;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.me-1 {
+    margin-right: 0.25rem;
+}
+
+.me-2 {
+    margin-right: 0.5rem;
 }
 </style>
 
@@ -948,31 +840,15 @@ function openEditBranchModal(id, name, location) {
     document.getElementById('editBranchModal').classList.add('active');
 }
 
-function openEditRoomModal(id, roomNumber, roomTypeId, status) {
-    document.getElementById('editRoomId').value = id;
-    document.getElementById('editRoomNumber').value = roomNumber;
-    document.getElementById('editRoomType').value = roomTypeId;
-    document.getElementById('editRoomStatus').value = status;
-    document.getElementById('editRoomModal').classList.add('active');
-}
-
 function confirmDelete(type, id) {
     const modal = document.getElementById('deleteModal');
     const typeSpan = document.getElementById('deleteType');
     const deleteButton = document.getElementById('deleteButton');
     const branchIdInput = document.getElementById('deleteBranchId');
-    const roomIdInput = document.getElementById('deleteRoomId');
     
     typeSpan.textContent = type;
-    if (type === 'branch') {
-        branchIdInput.value = id;
-        roomIdInput.value = '';
-        deleteButton.name = 'delete_branch';
-    } else {
-        roomIdInput.value = id;
-        branchIdInput.value = '';
-        deleteButton.name = 'delete_room';
-    }
+    branchIdInput.value = id;
+    deleteButton.name = 'delete_branch';
     
     modal.classList.add('active');
 }
@@ -990,23 +866,19 @@ document.addEventListener('DOMContentLoaded', function() {
     function toggleSidebar() {
         sidebar.classList.toggle('collapsed');
         const isCollapsed = sidebar.classList.contains('collapsed');
-        // Update icons
         if (sidebarToggle) {
             sidebarToggle.querySelector('i').classList.toggle('ri-menu-fold-line', !isCollapsed);
             sidebarToggle.querySelector('i').classList.toggle('ri-menu-unfold-line', isCollapsed);
         }
         mobileSidebarToggle.querySelector('i').classList.toggle('ri-menu-line', isCollapsed);
         mobileSidebarToggle.querySelector('i').classList.toggle('ri-close-line', !isCollapsed);
-        // Adjust content margin
         const dashboardContent = document.querySelector('.dashboard__content');
         dashboardContent.style.marginLeft = window.innerWidth <= 768 && !isCollapsed ? '250px' : '0';
     }
 
-    // Event listeners for toggles
     if (sidebarToggle) sidebarToggle.addEventListener('click', toggleSidebar);
     if (mobileSidebarToggle) mobileSidebarToggle.addEventListener('click', toggleSidebar);
 
-    // Initialize sidebar state
     if (window.innerWidth <= 768) {
         sidebar.classList.add('collapsed');
         mobileSidebarToggle.querySelector('i').classList.add('ri-menu-line');
@@ -1016,7 +888,6 @@ document.addEventListener('DOMContentLoaded', function() {
         document.querySelector('.dashboard__content').style.marginLeft = '250px';
     }
 
-    // Handle window resize
     window.addEventListener('resize', function() {
         const dashboardContent = document.querySelector('.dashboard__content');
         if (window.innerWidth <= 768) {
@@ -1030,7 +901,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Auto-dismiss alerts
     const alerts = document.querySelectorAll('.alert');
     alerts.forEach(alert => {
         setTimeout(() => {
@@ -1040,7 +910,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 5000);
     });
 
-    // Form validation for edit branch
     const editBranchForm = document.getElementById('editBranchForm');
     if (editBranchForm) {
         editBranchForm.addEventListener('submit', function(e) {
@@ -1052,25 +921,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert.className = 'alert alert--error';
                 alert.innerHTML = '<i class="ri-error-warning-line"></i><span>Please provide a valid branch name and location.</span>';
                 editBranchForm.parentNode.prepend(alert);
-                setTimeout(() => {
-                    alert.style.opacity = '0';
-                    alert.style.transform = 'translateY(-10px)';
-                    setTimeout(() => alert.remove(), 300);
-                }, 5000);
-            }
-        });
-    }
-
-    // Form validation for edit room
-    const editRoomForm = document.getElementById('editRoomForm');
-    if (editRoomForm) {
-        editRoomForm.addEventListener('submit', function(e) {
-            const roomNumber = document.getElementById('editRoomNumber').value.trim();
-            if (!roomNumber) {
-                e.preventDefault();
-                const alert = document.createElement('div');
-                alert.className = 'alert alert--error';
-                alert.innerHTML = '<i class="ri-error-warning-line"></i><span>Please provide a valid room number.</span>';                editRoomForm.parentNode.prepend(alert);
                 setTimeout(() => {
                     alert.style.opacity = '0';
                     alert.style.transform = 'translateY(-10px)';
